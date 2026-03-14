@@ -171,7 +171,7 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
             env[key_var] = value
         else:
             console.print(f"  [yellow]{key_var}[/yellow] is not set.\n")
-            console.print(f"  You can set it permanently by adding this to your shell profile:\n")
+            console.print("  You can set it permanently by adding this to your shell profile:\n")
             console.print(f"    [dim]export {key_var}=your-key-here[/dim]\n")
             value = click.prompt(f"  Enter {key_var} for this session", hide_input=True).strip()
             if not value:
@@ -199,8 +199,8 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
             if val:
                 env[var] = val
             elif var == "COMPOSIO_API_KEY":
-                console.print(f"  [yellow]Warning:[/yellow] COMPOSIO_API_KEY is not set — "
-                              f"Composio tools will fail at runtime.")
+                console.print("  [yellow]Warning:[/yellow] COMPOSIO_API_KEY is not set — "
+                              "Composio tools will fail at runtime.")
 
     if eff_persistence:
         # Forward the env var referenced by ${VAR_NAME} in the persistence URL

@@ -6,7 +6,6 @@ import json
 import os
 import re
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -213,10 +212,10 @@ def up_cmd(agentfile_path: str, tag: str, detach: bool) -> None:
     # 1. Create Docker bridge network
     try:
         with console.status(f"  Creating network [bold]{swarm}[/bold]…", spinner="dots"):
-            network = client.networks.create(swarm, driver="bridge")
+            client.networks.create(swarm, driver="bridge")
         console.print(f"  [green]✓[/green] Created network [bold]{swarm}[/bold]")
     except DockerException:
-        network = client.networks.get(swarm)
+        client.networks.get(swarm)
         console.print(f"  [dim]Reusing existing network [bold]{swarm}[/bold][/dim]")
 
     # Fetch integration credentials once and inject into all agents
@@ -313,7 +312,7 @@ def up_cmd(agentfile_path: str, tag: str, detach: bool) -> None:
     console.print(f"  Entry agent: [bold]{af.entry_agent.name}[/bold] → localhost:{host_ports[af.entry_agent.name]}")
     console.print()
     console.print("  Commands:")
-    console.print(f"    ninetrix status")
+    console.print("    ninetrix status")
     console.print(f"    ninetrix invoke --agent {af.entry_agent.name} -m \"your task\"")
-    console.print(f"    ninetrix logs --follow")
-    console.print(f"    ninetrix down\n")
+    console.print("    ninetrix logs --follow")
+    console.print("    ninetrix down\n")

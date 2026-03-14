@@ -158,8 +158,8 @@ def invoke_cmd(
         # Trigger-mode agents process messages asynchronously
         run_id = data.get("run_id", result_tid)
         console.print(f"  [green]✓[/green] Message queued  [dim](run_id: {run_id})[/dim]")
-        console.print(f"  [dim]The agent is processing in the background.[/dim]")
-        console.print(f"  [dim]Follow progress:  ninetrix logs --follow[/dim]\n")
+        console.print("  [dim]The agent is processing in the background.[/dim]")
+        console.print("  [dim]Follow progress:  ninetrix logs --follow[/dim]\n")
 
     elif status == "error":
         console.print(f"  [red]✗[/red] Agent error: {data.get('error', 'unknown')}")

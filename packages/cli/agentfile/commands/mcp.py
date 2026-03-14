@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
-from pathlib import Path
 
 import click
 import yaml
@@ -242,7 +240,7 @@ def mcp_test(name: str, timeout: int) -> None:
 async def _test_server(name: str, sdef: MCPServerDef, timeout: int) -> None:
     """Connect to an MCP server and print its tool list."""
     from contextlib import AsyncExitStack
-    from mcp import ClientSession, StdioServerParameters
+    from mcp import ClientSession
     from mcp.client.stdio import stdio_client
 
     params = _build_server_params(sdef)
@@ -278,7 +276,7 @@ async def _test_server(name: str, sdef: MCPServerDef, timeout: int) -> None:
             console.print()
 
 
-def _build_server_params(sdef: MCPServerDef) -> "StdioServerParameters":
+def _build_server_params(sdef: MCPServerDef):
     """Translate an MCPServerDef into StdioServerParameters for the MCP SDK."""
     from mcp import StdioServerParameters
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import docker
-from docker.errors import DockerException, ImageNotFound
+from docker.errors import DockerException
 from rich.console import Console
 
 if TYPE_CHECKING:

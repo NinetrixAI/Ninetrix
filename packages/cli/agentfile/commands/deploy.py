@@ -8,7 +8,6 @@ from pathlib import Path
 
 import click
 from rich.console import Console
-from rich.prompt import Prompt
 
 from agentfile.core.models import AgentFile
 from agentfile.core.docker import build_image, push_image

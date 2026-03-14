@@ -13,7 +13,6 @@ from agentfile.core.auth import (
     TOKEN_FILE,
     auth_headers,
     clear_token,
-    read_token,
     save_token,
 )
 

@@ -338,7 +338,7 @@ def gateway_doctor() -> None:
     except Exception as exc:
         console.print(f"  [red]✗[/red] Gateway not reachable at [bold]{url}[/bold]")
         console.print(f"    {exc}")
-        console.print(f"\n  Fix: [bold]ninetrix gateway start[/bold]\n")
+        console.print("\n  Fix: [bold]ninetrix gateway start[/bold]\n")
         raise SystemExit(1)
 
     # ── 2. Worker connections ──────────────────────────────────────────────────
@@ -411,14 +411,14 @@ def gateway_doctor() -> None:
                     f"    [yellow]?[/yellow]  {server_name:<22} "
                     f"[yellow]0 tools[/yellow] — check worker logs"
                 )
-                fixes.append(f"docker compose -f docker-compose.gateway.yml logs mcp-worker")
+                fixes.append("docker compose -f docker-compose.gateway.yml logs mcp-worker")
             else:
                 all_ok = False
                 console.print(
                     f"    [yellow]?[/yellow]  {server_name:<22} "
                     f"[yellow]0 tools[/yellow] — credentials set but server may have failed"
                 )
-                fixes.append(f"docker compose -f docker-compose.gateway.yml logs mcp-worker")
+                fixes.append("docker compose -f docker-compose.gateway.yml logs mcp-worker")
 
     # Show tools from servers not declared in yaml (e.g. dynamically added)
     for server_name, count in tools_by_server.items():

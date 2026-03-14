@@ -39,7 +39,6 @@ def _fail(msg: str) -> tuple[str, str, str]:
 def _check_docker() -> tuple[str, str, str]:
     try:
         import docker
-        from docker.errors import DockerException
         client = docker.from_env()
         info = client.info()
         return _ok(f"Docker {info.get('ServerVersion', 'running')}")

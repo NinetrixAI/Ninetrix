@@ -129,8 +129,8 @@ def _print_gateway_status() -> None:
         )
     except Exception:
         console.print(
-            f"  [dim]MCP Gateway:[/dim]  [dim]offline[/dim]  "
-            f"[dim]— run [bold]ninetrix gateway start[/bold][/dim]\n"
+            "  [dim]MCP Gateway:[/dim]  [dim]offline[/dim]  "
+            "[dim]— run [bold]ninetrix gateway start[/bold][/dim]\n"
         )
 
 

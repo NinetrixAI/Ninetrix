@@ -99,14 +99,14 @@ def rollback_cmd(agent_name: str, tag: str, agentfile_path: str) -> None:
             c = client.containers.get(agent_info.get("container_id") or container_name)
             c.stop(timeout=5)
             c.remove()
-        console.print(f"  [green]✓[/green] Stopped current container")
+        console.print("  [green]✓[/green] Stopped current container")
     except DockerException:
         try:
             with console.status(f"  Stopping [bold]{agent_name}[/bold]…", spinner="dots"):
                 c = client.containers.get(container_name)
                 c.stop(timeout=5)
                 c.remove()
-            console.print(f"  [green]✓[/green] Stopped current container")
+            console.print("  [green]✓[/green] Stopped current container")
         except DockerException:
             console.print(f"  [dim]{agent_name} was already stopped[/dim]")
 

@@ -341,11 +341,11 @@ def compose_cmd(
 
     # ── 1. Docker network ────────────────────────────────────────────────────
     try:
-        network = client.networks.create(swarm, driver="bridge")
+        client.networks.create(swarm, driver="bridge")
         console.print(f"  [green]✓[/green] Created network [bold]{swarm}[/bold]")
     except DockerException:
         try:
-            network = client.networks.get(swarm)
+            client.networks.get(swarm)
             console.print(f"  [dim]Reusing existing network [bold]{swarm}[/bold][/dim]")
         except DockerException as exc:
             docker_fail(exc, "Failed to create Docker network")
@@ -498,7 +498,7 @@ def compose_cmd(
             if "not found" in msg.lower() or "No such image" in msg:
                 hint = f"Run 'ninetrix build --file {agentfile_path}' to build the image first."
             elif "already in use" in msg or "already allocated" in msg:
-                hint = f"Run 'ninetrix down' to stop existing containers, then retry."
+                hint = "Run 'ninetrix down' to stop existing containers, then retry."
             _abort(f"Failed to start '{name}': {msg}", hint)
 
         container_ids[name] = container.id
@@ -551,7 +551,7 @@ def compose_cmd(
     )
     console.print()
     console.print("  Commands:")
-    console.print(f"    ninetrix status")
+    console.print("    ninetrix status")
     console.print(f"    ninetrix invoke --agent {af.entry_agent.name} -m \"your task\"")
-    console.print(f"    ninetrix logs --follow")
-    console.print(f"    ninetrix down\n")
+    console.print("    ninetrix logs --follow")
+    console.print("    ninetrix down\n")

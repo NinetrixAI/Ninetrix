@@ -141,4 +141,4 @@ def down_cmd(agentfile_path: str | None, swarm: str | None) -> None:
     if state_file.exists():
         state_file.unlink()
 
-    console.print(f"\n  [bold]Stack [green]down[/green].[/bold]\n")
+    console.print("\n  [bold]Stack [green]down[/green].[/bold]\n")
