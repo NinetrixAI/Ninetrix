@@ -1,0 +1,82 @@
+# ── Python ────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# ── Distribution / packaging ──────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+.eggs/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+
+# ── Virtual environments ──────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.env.local
+.env.*.local
+
+# ── Environment / secrets ─────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+
+# ── Agentfile runtime artifacts ───────────────────
+# Local test yaml files (not examples/)
+agentfile-*.yaml
+agentfile copy.yaml
+*_copy.yaml
+
+# Scratch/path directories created by CLI
+path/
+shared/
+
+# Agent pool state
+~/.agentfile/pools/
+
+# ── Docker ────────────────────────────────────────
+*.dockerfile.tmp
+
+# ── Testing ───────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ── Type checking ─────────────────────────────────
+.mypy_cache/
+.dmypy.json
+.pyright/
+.ruff_cache/
+
+# ── IDEs ──────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Jupyter ───────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Logs ──────────────────────────────────────────
+*.log
+logs/

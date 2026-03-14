@@ -1,0 +1,63 @@
+# Local development stack for the MCP Gateway.
+# Starts the gateway + a demo worker with the filesystem MCP server.
+#
+# Usage (from cli/ directory):
+#   docker compose -f docker-compose.gateway.yml up --build
+#
+# To add more MCP servers, copy ../mcp-worker/mcp-worker.yaml.example
+# to ../mcp-worker/mcp-worker.yaml and uncomment the servers you want.
+
+services:
+  mcp-gateway:
+    build: ../mcp-gateway
+    image: ninetrix/mcp-gateway:dev
+    ports:
+      - "8080:8080"
+    environment:
+      MCP_GATEWAY_SECRET: "${MCP_GATEWAY_SECRET:-dev-secret}"
+      MCP_GATEWAY_REQUIRE_AUTH: "false"
+      # Prod/SaaS mode — set these to enable per-workspace token auth:
+      # MCP_GATEWAY_SAAS_API_URL: "${NINETRIX_API_URL:-}"
+      # MCP_GATEWAY_SERVICE_SECRET: "${MCP_GATEWAY_SERVICE_SECRET:-dev-gateway-secret}"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  mcp-worker:
+    build: ../mcp-worker
+    image: ninetrix/mcp-worker:dev
+    depends_on:
+      mcp-gateway:
+        condition: service_healthy
+    volumes:
+      # Mount the example config — rename to mcp-worker.yaml to customise
+      - ../mcp-worker/mcp-worker.yaml.example:/app/mcp-worker.yaml:ro
+      # Expose /tmp on the host to the filesystem MCP server
+      - /tmp:/data:ro
+    environment:
+      MCP_GATEWAY_URL: "ws://mcp-gateway:8080"
+      MCP_GATEWAY_TOKEN: "${MCP_GATEWAY_SECRET:-dev-secret}"
+      MCP_WORKSPACE_ID: "default"
+      MCP_WORKER_NAME: "local-worker"
+      MCP_WORKER_CONFIG: "/app/mcp-worker.yaml"
+      # Integration credentials — auto-forwarded by `ninetrix gateway start/restart`
+      # from host env / .env. No manual editing needed.
+      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN:-${GITHUB_TOKEN:-}}"
+      SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN:-}"
+      SLACK_TEAM_ID: "${SLACK_TEAM_ID:-}"
+      NOTION_API_KEY: "${NOTION_API_KEY:-}"
+      LINEAR_API_KEY: "${LINEAR_API_KEY:-}"
+      BRAVE_API_KEY: "${BRAVE_API_KEY:-}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      GOOGLE_DRIVE_ACCESS_TOKEN: "${GOOGLE_DRIVE_ACCESS_TOKEN:-}"
+      GOOGLE_SHEETS_ACCESS_TOKEN: "${GOOGLE_SHEETS_ACCESS_TOKEN:-}"
+      GOOGLE_DOCS_ACCESS_TOKEN: "${GOOGLE_DOCS_ACCESS_TOKEN:-}"
+      POSTGRES_CONNECTION_STRING: "${POSTGRES_CONNECTION_STRING:-}"
+      # SaaS credential injection — set to enable per-tool credential fetching:
+      # MCP_SAAS_API_URL: "${NINETRIX_API_URL:-}"
+      # MCP_GATEWAY_SERVICE_SECRET: "${MCP_GATEWAY_SERVICE_SECRET:-dev-gateway-secret}"

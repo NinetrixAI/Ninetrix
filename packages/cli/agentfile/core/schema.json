@@ -1,0 +1,461 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Agentfile",
+  "description": "Schema for agentfile.yaml — defines one or more AI agent containers",
+  "type": "object",
+  "required": ["agents"],
+  "additionalProperties": false,
+  "properties": {
+
+    "version": {
+      "type": "string",
+      "description": "Agentfile schema version (for human reference only)"
+    },
+
+    "persistence": {
+      "type": "object",
+      "description": "Global persistence config — saves full message history and tool results to PostgreSQL so runs can be resumed with --thread-id. Can be overridden per-agent.",
+      "required": ["provider", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "enum": ["postgres"], "description": "Storage backend. Only 'postgres' is supported." },
+        "url":      { "type": "string", "minLength": 1, "description": "PostgreSQL connection URL. Use ${ENV_VAR} to reference environment variables (e.g. ${DATABASE_URL})." }
+      }
+    },
+
+    "governance": {
+      "type": "object",
+      "description": "Global governance config — controls spending, human approval gates, and rate limits. Can be overridden per-agent.",
+      "additionalProperties": false,
+      "properties": {
+        "max_budget_per_run": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Maximum spend in USD allowed per run. The agent stops when this limit is reached."
+        },
+        "human_approval": {
+          "type": "object",
+          "description": "Pause and require human approval before specific tool calls execute.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":    { "type": "boolean", "description": "Enable human-in-the-loop approval gates." },
+            "actions":    { "type": "array", "items": { "type": "string" }, "description": "Tool names that require approval before running (e.g. ['file_write', 'GMAIL_SEND_EMAIL'])." },
+            "notify_url": { "type": "string", "description": "Optional webhook URL to POST when approval is required. Supports ${ENV_VAR} syntax." }
+          }
+        },
+        "rate_limit": { "type": "string", "description": "Rate limit string (e.g. '10_requests_per_minute')." }
+      }
+    },
+
+    "execution": {
+      "type": "object",
+      "description": "Global execution defaults — applied to all agents unless overridden per-agent.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["direct", "planned"], "description": "'direct' = standard tool-use loop. 'planned' = generate a JSON plan first." },
+        "verify_steps": { "type": "boolean", "description": "After each tool call, a separate verifier LLM checks the result before proceeding." },
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "on_step_failure": { "type": "string", "enum": ["abort", "continue", "retry_once"] },
+        "verifier": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "provider": { "type": "string", "enum": ["anthropic", "openai", "google", "mistral", "groq"] },
+            "model":      { "type": "string" },
+            "max_tokens": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "thinking": {
+          "description": "Pre-run reasoning step.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled":    { "type": "boolean" },
+                "model":      { "type": "string" },
+                "provider":   { "type": "string", "enum": ["anthropic", "openai", "google", "mistral", "groq"] },
+                "max_tokens": { "type": "integer", "minimum": 1 },
+                "prompt":     { "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    },
+
+    "triggers": {
+      "type": "array",
+      "description": "Global triggers — start the agent automatically on a schedule or via HTTP webhook. Use target_agent to route to a specific agent in multi-agent files.",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "additionalProperties": false,
+        "properties": {
+          "type":         { "type": "string", "enum": ["webhook", "schedule"], "description": "'webhook' exposes an HTTP endpoint; 'schedule' runs on a cron expression." },
+          "endpoint":     { "type": "string", "description": "HTTP path for the webhook trigger (e.g. /run). POST with {\"message\": \"...\"}." },
+          "cron":         { "type": "string", "description": "Cron expression for schedule triggers (e.g. '0 9 * * MON' = every Monday at 9am)." },
+          "port":         { "type": "integer", "default": 8000, "description": "Host port to expose for webhook triggers. Defaults to 8000." },
+          "message":      { "type": "string", "description": "Message to send to the agent when a schedule trigger fires." },
+          "target_agent": { "type": "string", "description": "Agent key that receives this trigger. Defaults to the entry agent if omitted." }
+        }
+      }
+    },
+
+    "agents": {
+      "type": "object",
+      "description": "Map of agent-key → agent definition. First entry is the entry point.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["metadata", "runtime", "tools"],
+        "additionalProperties": false,
+        "properties": {
+
+          "metadata": {
+            "type": "object",
+            "description": "Agent persona and instructions — composed into the system prompt at build time.",
+            "required": [],
+            "additionalProperties": false,
+            "properties": {
+              "name":         { "type": "string", "description": "Human-readable agent name." },
+              "description":  { "type": "string", "description": "One-line description of what this agent does." },
+              "role":         { "type": "string", "description": "Agent's role (e.g. 'Senior Software Engineer'). Included in system prompt." },
+              "goal":         { "type": "string", "description": "Agent's primary objective. Included in system prompt." },
+              "instructions": { "type": "string", "description": "Detailed behavioral instructions for the agent. Supports multi-line YAML strings (use |)." },
+              "constraints":  { "type": "array", "items": { "type": "string" }, "description": "Hard rules the agent must never violate (e.g. 'Never delete files without confirmation')." }
+            }
+          },
+
+          "runtime": {
+            "type": "object",
+            "description": "LLM provider, model, and container resource configuration.",
+            "required": ["provider", "model"],
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "type": "string",
+                "enum": ["anthropic", "openai", "google", "mistral", "groq"],
+                "description": "LLM provider. Can be overridden at runtime via AGENTFILE_PROVIDER env var."
+              },
+              "model":       { "type": "string", "minLength": 1, "description": "Model name for the chosen provider (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash-lite). Override with AGENTFILE_MODEL env var." },
+              "temperature": { "type": "number", "minimum": 0.0, "maximum": 2.0, "description": "Sampling temperature. 0.0 = deterministic, 1.0 = default, 2.0 = very creative. Override with AGENTFILE_TEMPERATURE env var." },
+              "resources": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Docker container resource limits and base image configuration.",
+                "properties": {
+                  "cpu":        { "type": "number", "exclusiveMinimum": 0, "description": "CPU cores to allocate (e.g. 1.0, 2.0). Maps to --cpus in docker run." },
+                  "memory":     { "type": "string", "description": "Memory limit in Docker format (e.g. 512Mi, 4Gi). Maps to --memory in docker run." },
+                  "storage":    { "type": "string", "description": "Storage annotation (e.g. 10Gi). Label only — not enforced by Docker." },
+                  "base_image": { "type": "string", "description": "Docker base image (e.g. python:3.12-slim). Defaults to python:3.12-slim." },
+                  "warm_pool":  { "type": "boolean", "description": "If true, container is not removed after exit — used by 'agentfile up' warm pools." }
+                }
+              }
+            }
+          },
+
+          "tools": {
+            "type": "array",
+            "description": "Tools the agent can call. At least one is required.",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["name", "source"],
+              "additionalProperties": false,
+              "properties": {
+                "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
+                "source": {
+                  "type": "string",
+                  "pattern": "^(mcp://|composio://|local\\.).+",
+                  "description": "Tool source: 'mcp://<key>' for MCP servers (run 'agentfile mcp list' to see available keys), 'composio://<APP>' for Composio integrations (e.g. composio://GITHUB), 'local.<module>' for custom Python tools."
+                },
+                "actions": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 },
+                  "description": "Composio-only: specific action slugs to expose (e.g. GMAIL_SEND_EMAIL). If omitted, all actions for the app are available."
+                }
+              }
+            }
+          },
+
+          "governance": {
+            "type": "object",
+            "description": "Per-agent governance override — takes precedence over global governance settings.",
+            "additionalProperties": false,
+            "properties": {
+              "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0, "description": "Maximum spend in USD for this agent per run." },
+              "human_approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled":    { "type": "boolean", "description": "Enable human-in-the-loop approval gates for this agent." },
+                  "actions":    { "type": "array", "items": { "type": "string" }, "description": "Tool names that require approval before running." },
+                  "notify_url": { "type": "string", "description": "Webhook URL to POST when approval is required. Supports ${ENV_VAR} syntax." }
+                }
+              },
+              "rate_limit": { "type": "string", "description": "Rate limit string (e.g. '10_requests_per_minute')." }
+            }
+          },
+
+          "execution": {
+            "type": "object",
+            "description": "Execution mode and step verification configuration.",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["direct", "planned"], "description": "'direct' = standard tool-use loop. 'planned' = generate a JSON plan first, then execute step-by-step." },
+              "verify_steps": { "type": "boolean", "description": "After each tool call, a separate verifier LLM checks the result before proceeding." },
+              "max_steps": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum number of steps in a planned execution. Defaults to 10." },
+              "on_step_failure": {
+                "type": "string",
+                "enum": ["abort", "continue", "retry_once"],
+                "description": "What to do when a step fails verification: 'abort' stops immediately, 'continue' logs and proceeds, 'retry_once' asks the LLM to retry."
+              },
+              "verifier": {
+                "type": "object",
+                "description": "LLM used to verify step results. Defaults to the agent's own provider/model if omitted.",
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": ["anthropic", "openai", "google", "mistral", "groq"],
+                    "description": "Provider for the verifier LLM. Use a fast/cheap model (e.g. claude-haiku-4-5-20251001)."
+                  },
+                  "model":      { "type": "string", "description": "Verifier model name. Override with AGENTFILE_VERIFIER_MODEL env var." },
+                  "max_tokens": { "type": "integer", "minimum": 1, "description": "Max tokens for the verifier response. 128 is usually sufficient." }
+                }
+              },
+              "thinking": {
+                "description": "Pre-run reasoning step — the agent reasons about the task before using any tools. Visible in the run trace UI as an amber 'Thinking' node.",
+                "oneOf": [
+                  { "type": "boolean", "description": "Set to true to enable thinking with all defaults (agent's own model, 2048 max tokens)." },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "enabled":    { "type": "boolean", "description": "Enable the thinking step." },
+                      "model":      { "type": "string", "description": "Model to use for thinking. Defaults to the agent's runtime.model. Can use a stronger model (e.g. claude-opus-4-6) for deeper reasoning." },
+                      "provider":   { "type": "string", "enum": ["anthropic", "openai", "google", "mistral", "groq"], "description": "Provider for the thinking LLM. Defaults to the agent's runtime.provider." },
+                      "max_tokens": { "type": "integer", "minimum": 1, "description": "Max output tokens for the thinking response. Default: 2048." },
+                      "prompt":     { "type": "string", "description": "Custom instruction appended to the thinking prompt. Overrides the default 'analyze the task' instruction." }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+
+          "persistence": {
+            "type": "object",
+            "description": "Per-agent persistence override",
+            "required": ["provider", "url"],
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "type": "string", "enum": ["postgres"] },
+              "url":      { "type": "string", "minLength": 1 }
+            }
+          },
+
+          "triggers": {
+            "type": "array",
+            "description": "Per-agent triggers (in addition to global triggers targeting this agent)",
+            "items": {
+              "type": "object",
+              "required": ["type"],
+              "additionalProperties": false,
+              "properties": {
+                "type":     { "type": "string", "enum": ["webhook", "schedule"] },
+                "endpoint": { "type": "string" },
+                "cron":     { "type": "string" },
+                "port":     { "type": "integer", "default": 8000 },
+                "message":  { "type": "string" }
+              }
+            }
+          },
+
+          "serve": {
+            "type": "boolean",
+            "description": "Keep running and accept /invoke HTTP requests even without triggers or collaborators"
+          },
+
+          "collaborators": {
+            "type": "array",
+            "description": "Names of other agents this agent can delegate to",
+            "items": { "type": "string", "minLength": 1 }
+          },
+
+          "volumes": {
+            "type": "array",
+            "description": "Volumes to mount: string refs to global volumes, or inline VolumeSpec objects",
+            "items": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name":           { "type": "string" },
+                    "provider":       { "type": "string", "enum": ["local", "s3"] },
+                    "host_path":      { "type": "string" },
+                    "bucket":         { "type": "string" },
+                    "prefix":         { "type": "string" },
+                    "container_path": { "type": "string" },
+                    "read_only":      { "type": "boolean" },
+                    "sync":           { "type": "string", "enum": ["bidirectional", "download-only", "upload-only"] }
+                  }
+                }
+              ]
+            }
+          }
+
+        }
+      }
+    },
+
+    "environments": {
+      "type": "object",
+      "description": "Named environment overlays (e.g. dev, staging, prod). Specify only the fields that differ per environment — everything else inherits from the base config. Apply with: agentfile build --environment dev",
+      "additionalProperties": {
+        "type": "object",
+        "description": "Partial agentfile config. All fields are optional.",
+        "additionalProperties": false,
+        "properties": {
+          "persistence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "type": "string", "enum": ["postgres"] },
+              "url": { "type": "string", "description": "PostgreSQL connection URL. Supports ${ENV_VAR} syntax." }
+            }
+          },
+          "governance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0, "description": "Maximum spend in USD per run." },
+              "human_approval": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled":    { "type": "boolean" },
+                  "actions":    { "type": "array", "items": { "type": "string" } },
+                  "notify_url": { "type": "string" }
+                }
+              },
+              "rate_limit": { "type": "string" }
+            }
+          },
+          "agents": {
+            "type": "object",
+            "description": "Per-agent overrides for this environment. Use the same agent keys as in the base agents: block.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name":         { "type": "string" },
+                    "description":  { "type": "string" },
+                    "role":         { "type": "string" },
+                    "goal":         { "type": "string" },
+                    "instructions": { "type": "string" },
+                    "constraints":  { "type": "array", "items": { "type": "string" } }
+                  }
+                },
+                "runtime": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider":    { "type": "string", "enum": ["anthropic", "openai", "google", "mistral", "groq"] },
+                    "model":       { "type": "string", "description": "Override model for this environment (e.g. use claude-haiku-4-5-20251001 in dev)." },
+                    "temperature": { "type": "number", "minimum": 0.0, "maximum": 2.0 },
+                    "resources": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "cpu":        { "type": "number", "exclusiveMinimum": 0 },
+                        "memory":     { "type": "string" },
+                        "storage":    { "type": "string" },
+                        "base_image": { "type": "string" },
+                        "warm_pool":  { "type": "boolean" }
+                      }
+                    }
+                  }
+                },
+                "governance": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0 },
+                    "human_approval": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled":    { "type": "boolean" },
+                        "actions":    { "type": "array", "items": { "type": "string" } },
+                        "notify_url": { "type": "string" }
+                      }
+                    },
+                    "rate_limit": { "type": "string" }
+                  }
+                },
+                "execution": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode":             { "type": "string", "enum": ["direct", "planned"] },
+                    "verify_steps":     { "type": "boolean" },
+                    "max_steps":        { "type": "integer", "minimum": 1, "maximum": 50 },
+                    "on_step_failure":  { "type": "string", "enum": ["abort", "continue", "retry_once"] }
+                  }
+                },
+                "persistence": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider": { "type": "string", "enum": ["postgres"] },
+                    "url":      { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "mcp_gateway": {
+      "type": "object",
+      "description": "Connect agents to a remote MCP Gateway instead of spawning local MCP server processes. The gateway aggregates tools from workers running anywhere — cloud or on-prem.",
+      "required": ["url"],
+      "additionalProperties": false,
+      "properties": {
+        "url":          { "type": "string", "minLength": 1, "description": "HTTP(S) base URL of the MCP Gateway (e.g. https://mcp.ninetrix.io). Supports ${ENV_VAR} syntax." },
+        "token":        { "type": "string", "description": "Bearer token for gateway authentication. Use ${MCP_GATEWAY_TOKEN} to avoid hard-coding secrets." },
+        "workspace_id": { "type": "string", "description": "Workspace to scope tool access. Defaults to 'default'." }
+      }
+    },
+
+    "volumes": {
+      "type": "object",
+      "description": "Named shared volumes (local dirs or S3 buckets) available to agents",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider":       { "type": "string", "enum": ["local", "s3"] },
+          "host_path":      { "type": "string" },
+          "bucket":         { "type": "string" },
+          "prefix":         { "type": "string" },
+          "container_path": { "type": "string" },
+          "read_only":      { "type": "boolean" },
+          "sync":           { "type": "string", "enum": ["bidirectional", "download-only", "upload-only"] }
+        }
+      }
+    }
+
+  }
+}

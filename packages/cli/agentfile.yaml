@@ -1,0 +1,92 @@
+# yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
+# docs: https://docs.ninetrix.io
+
+
+governance:
+  max_budget_per_run: 1.00
+  human_approval:
+    enabled: true
+    actions:
+      - file_write
+      - shell_exec
+  rate_limit: 10_requests_per_minute
+
+# triggers:
+#   - type: webhook
+#     endpoint: /run
+
+persistence:
+  provider: "postgres"
+  url: "${DATABASE_URL}"
+
+execution:
+  mode: planned
+  thinking:
+    enabled: true
+    model: gemini-2.5-flash
+    provider: google
+
+agents:
+  samata:
+    metadata:
+      name: Samata
+      description: An AI agent built with Agentfile
+      role: "AI Assistant"
+      goal: "Help users accomplish their tasks accurately and efficiently"
+      instructions: |
+        Be concise, accurate, and helpful.
+        Always verify information before presenting it as fact.
+        Use available tools when they can provide better or more current information.
+      constraints:
+        - "Do not make up information or present speculation as fact"
+        - "Stay within the scope of your defined role and goal"
+    runtime:
+      provider: google
+      model: gemini-2.5-flash
+      temperature: 0.2
+    tools:
+      - name: web_search
+        source: mcp://duckduckgo
+    # Composio tools — connect 250+ apps (GitHub, Slack, Gmail, Linear, Jira, etc.)
+    # Requires COMPOSIO_API_KEY in your .env — get one at https://app.composio.dev
+    # - name: github
+    #   source: composio://GITHUB
+    # - name: gmail
+    #   source: composio://GMAIL
+    #   actions:             # optional: limit to specific actions
+    #     - GMAIL_SEND_EMAIL
+    collaborators: []
+    # execution:
+    #   mode: planned              # "direct" (default) | "planned" (plan-then-execute)
+    #   verify_steps: true         # call a verifier LLM after each tool call
+    #   max_steps: 10              # cap on plan size
+    #   on_step_failure: continue  # "abort" | "continue" | "retry_once"
+    #   verifier:
+    #     provider: anthropic      # defaults to agent's provider
+    #     model: claude-haiku-4-5-20251001   # small/fast model recommended
+    #     max_tokens: 128
+
+# Environment overrides — only specify what changes per environment.
+# Usage: agentfile build --environment dev
+#        agentfile run   --environment prod
+#
+# environments:
+#   dev:
+#     governance:
+#       max_budget_per_run: 0.10       # tighter budget locally
+#       human_approval:
+#         enabled: false              # skip approval gates in dev
+#     agents:
+#       samata:
+#         runtime:
+#           model: claude-haiku-4-5-20251001   # cheaper model in dev
+#   prod:
+#     persistence:
+#       provider: postgres
+#       url: "${PROD_DATABASE_URL}"
+#     agents:
+#       samata:
+#         runtime:
+#           resources:
+#             cpu: 2.0
+#             memory: 4Gi

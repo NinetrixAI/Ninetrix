@@ -1,0 +1,107 @@
+# Multi-agent example: orchestrator delegates to researcher + writer
+# Both agents share a local workspace volume mounted at /data.
+#
+# Usage (run from cli/):
+#   ninetrix build --file exmaples/multi-agent.yaml --tag dev
+#   ninetrix up   --file exmaples/multi-agent.yaml --tag dev
+#   ninetrix invoke --agent orchestrator -m "Research Python history and write a summary"
+#   ninetrix logs --follow
+#   cat shared/workspace/research.md    # researcher's raw findings
+#   cat shared/workspace/output.md      # writer's final content
+#   ninetrix down
+
+persistence:
+  provider: postgres
+  url: "${DATABASE_URL}"
+
+governance:
+  max_budget_per_run: 1.00
+  human_approval:
+    enabled: false
+    actions: []
+
+# triggers:
+#   - type: webhook
+#     endpoint: /run
+#     port: 8080
+#     target_agent: orchestrator
+
+# Shared volume: mounted at /data inside every agent that references it.
+# mcp://filesystem serves /data, so agents can read/write files there.
+volumes:
+  workspace:
+    provider: local
+    host_path: "./shared/workspace"
+    container_path: /data
+    read_only: false
+
+agents:
+  orchestrator:
+    metadata:
+      name: orchestrator
+      role: "Orchestrator"
+      goal: "Break down tasks and coordinate specialist agents"
+      instructions: |
+        You coordinate tasks between a researcher and a writer.
+        Workflow:
+          1. Delegate the research task to the researcher agent.
+          2. Once the researcher is done, delegate to the writer agent.
+          3. Read /data/output.md to get the final result and return it.
+        Use transfer_to_agent for each delegation step.
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    tools:
+      - name: web_search
+        source: mcp://duckduckgo
+      - name: files
+        source: mcp://filesystem
+    execution:
+      mode: planned
+    collaborators: [researcher, writer]
+    volumes:
+      - workspace
+
+  researcher:
+    metadata:
+      name: researcher
+      role: "Researcher"
+      goal: "Find accurate information and persist findings to the shared workspace"
+      instructions: |
+        Search the web thoroughly and return well-organized findings.
+        Always cite your sources.
+        When done, write your complete findings to /data/research.md using the
+        write_file tool so the writer agent can use them.
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+    tools:
+      - name: web_search
+        source: mcp://duckduckgo
+      - name: files
+        source: mcp://filesystem
+    collaborators: []
+    volumes:
+      - workspace
+
+  writer:
+    metadata:
+      name: writer
+      role: "Writer"
+      goal: "Transform research into polished content and save it to the shared workspace"
+      instructions: |
+        Read the researcher's findings from /data/research.md using the read_file tool.
+        Transform them into clear, engaging content with headings and bullet points.
+        Save your final output to /data/output.md using write_file.
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.7
+    tools:
+      - name: web_search
+        source: mcp://duckduckgo
+      - name: files
+        source: mcp://filesystem
+    collaborators: []
+    volumes:
+      - workspace
