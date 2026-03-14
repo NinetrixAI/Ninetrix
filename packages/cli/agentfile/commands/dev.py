@@ -136,14 +136,24 @@ def _compose_up(compose_file: Path, pull: bool) -> None:
             console.print("[dim]Images not on registry yet — building locally…[/dim]")
             _compose(compose_file, "build")
     console.print("[dim]Starting services…[/dim]\n")
-    # --build ensures local source is used if the remote image was never pulled
     result = subprocess.run(
         ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
         capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
-        console.print("[dim]Remote images not found — building from source…[/dim]")
-        _compose(compose_file, "up", "-d", "--remove-orphans", "--build")
+        if "not found" in result.stderr or "denied" in result.stderr:
+            raise click.ClickException(
+                "Could not pull Ninetrix images from GHCR.\n\n"
+                "  Images are published automatically on every push to main.\n"
+                "  If this is a fresh install, wait a few minutes for CI to finish,\n"
+                "  then run:  ninetrix dev --pull\n\n"
+                "  To check image status:\n"
+                "  https://github.com/Ninetrix-ai/Ninetrix/pkgs/container/ninetrix-api"
+            )
+        raise click.ClickException(
+            f"Failed to start services:\n{result.stderr.strip()}"
+        )
 
 
 def _compose_down(compose_file: Path) -> None:

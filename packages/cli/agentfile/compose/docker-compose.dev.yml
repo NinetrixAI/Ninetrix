@@ -17,9 +17,6 @@ services:
 
   api:
     image: ghcr.io/ninetrix-ai/ninetrix-api:latest
-    build:
-      context: ../../packages/api
-      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -35,9 +32,6 @@ services:
 
   mcp-gateway:
     image: ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest
-    build:
-      context: ../../packages/mcp-gateway
-      dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
@@ -51,9 +45,6 @@ services:
 
   mcp-worker:
     image: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
-    build:
-      context: ../../packages/mcp-worker
-      dockerfile: Dockerfile
     environment:
       MCP_GATEWAY_URL: ws://mcp-gateway:8080
       MCP_WORKSPACE_ID: local
