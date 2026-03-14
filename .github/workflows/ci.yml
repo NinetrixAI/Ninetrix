@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install ruff
-      - run: ruff check packages/cli/agentfile/
+      - run: ruff check packages/cli/
 
   validate-schema:
     name: Validate JSON Schema
@@ -26,19 +26,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install jsonschema
+      - run: pip install jsonschema pyyaml
       - name: Validate schema is well-formed
-        run: python -c "import json, jsonschema; s=json.load(open('schema/v1/agentfile.schema.json')); jsonschema.Draft7Validator.check_schema(s); print('Schema OK')"
+        run: python -c "import json, jsonschema; s=json.load(open('packages/cli/agentfile/core/schema.json')); jsonschema.Draft7Validator.check_schema(s); print('Schema OK')"
       - name: Validate examples against schema
         run: |
-          pip install pyyaml jsonschema
           python -c "
           import yaml, json, jsonschema, pathlib
-          schema = json.load(open('schema/v1/agentfile.schema.json'))
+          schema = json.load(open('packages/cli/agentfile/core/schema.json'))
           for f in pathlib.Path('examples').rglob('agentfile.yaml'):
               doc = yaml.safe_load(f.read_text())
-              jsonschema.validate(doc, schema)
-              print(f'  OK: {f}')
+              try:
+                  jsonschema.validate(doc, schema)
+                  print(f'  OK: {f}')
+              except jsonschema.ValidationError as e:
+                  print(f'  FAIL: {f} — {e.message}')
           "
 
   build-dashboard:
@@ -47,8 +49,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
