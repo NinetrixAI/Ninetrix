@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _pool: asyncpg.Pool | None = None
-
 CATALOG_SEED: list[dict] = [
     {
         "id": "github",
@@ -206,7 +205,27 @@ async def create_runner_events_table() -> None:
             received_at TIMESTAMPTZ DEFAULT NOW()
         )
     """)
-    # Ensure agentfile_checkpoints has parent_trace_id (added after initial schema)
+    # Create agentfile_checkpoints if it doesn't exist yet
+    await pool().execute("""
+        CREATE TABLE IF NOT EXISTS agentfile_checkpoints (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            trace_id    TEXT NOT NULL,
+            thread_id   TEXT NOT NULL,
+            agent_id    TEXT,
+            step_index  INTEGER NOT NULL DEFAULT 0,
+            timestamp   TIMESTAMPTZ DEFAULT NOW(),
+            updated_at  TIMESTAMPTZ DEFAULT NOW(),
+            status      TEXT NOT NULL DEFAULT 'in_progress',
+            checkpoint  JSONB NOT NULL DEFAULT '{}',
+            metadata    JSONB NOT NULL DEFAULT '{}',
+            parent_trace_id TEXT
+        )
+    """)
+    await pool().execute("""
+        CREATE INDEX IF NOT EXISTS checkpoints_thread_id_idx
+        ON agentfile_checkpoints (thread_id)
+    """)
+    # Ensure parent_trace_id column exists (migration for older schemas)
     await pool().execute("""
         ALTER TABLE agentfile_checkpoints
             ADD COLUMN IF NOT EXISTS parent_trace_id TEXT
