@@ -46,12 +46,17 @@ RUN pip install --no-cache-dir "apscheduler>=3.10"
 
 RUN pip install --no-cache-dir "aiohttp>=3.9"
 {% endif %}
-
 # Copy the agentfile
 COPY agentfile.yaml /app/agentfile.yaml
 
 # Copy agent entrypoint
 COPY entrypoint.py /app/entrypoint.py
+{% if has_local_tools %}
+
+# Copy local @Tool Python files and bundled ninetrix SDK
+COPY tools/ /app/tools/
+COPY ninetrix/ /app/ninetrix/
+{% endif %}
 
 ENV PYTHONUNBUFFERED=1
 ENV AGENTFILE_MODEL="{{ agent.model }}"

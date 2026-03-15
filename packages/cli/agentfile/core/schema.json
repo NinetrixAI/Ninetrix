@@ -168,8 +168,8 @@
                 "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
                 "source": {
                   "type": "string",
-                  "pattern": "^(mcp://|composio://|local\\.).+",
-                  "description": "Tool source: 'mcp://<key>' for MCP servers (run 'agentfile mcp list' to see available keys), 'composio://<APP>' for Composio integrations (e.g. composio://GITHUB), 'local.<module>' for custom Python tools."
+                  "pattern": "^(mcp://|composio://|local\\.|\\./|/).+",
+                  "description": "Tool source: 'mcp://<key>' for MCP servers, 'composio://<APP>' for Composio integrations (e.g. composio://GITHUB), './path/to/tools.py' or '/abs/path/tools.py' for local @Tool Python files."
                 },
                 "actions": {
                   "type": "array",

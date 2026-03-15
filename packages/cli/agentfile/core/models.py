@@ -86,7 +86,7 @@ class Tool:
         return self.source.startswith("composio://")
 
     def is_local(self) -> bool:
-        return self.source.startswith("local.")
+        return self.source.startswith("./") or self.source.startswith("/")
 
     @property
     def mcp_name(self) -> Optional[str]:

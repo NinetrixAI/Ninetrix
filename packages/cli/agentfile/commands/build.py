@@ -18,18 +18,22 @@ from agentfile.core.template_context import build_context
 console = Console()
 
 
-def _render_templates(agent_def: AgentDef, af: AgentFile, context_dir: Path) -> None:
+def _render_templates(
+    agent_def: AgentDef, af: AgentFile, context_dir: Path, agentfile_path: str = ""
+) -> None:
     """Render Dockerfile and entrypoint.py into context_dir for a single agent."""
     env = Environment(
         loader=PackageLoader("agentfile", "templates"),
         keep_trailing_newline=True,
     )
 
+    agentfile_dir = Path(agentfile_path).parent if agentfile_path else None
     ctx = build_context(
         af,
         agent_def,
         is_saas_runner=False,
         has_invoke_server=agent_def.serve,
+        agentfile_dir=agentfile_dir,
         _warn=lambda msg: console.print(f"  [yellow]Warning:[/yellow] {msg}"),
     )
 
@@ -38,6 +42,23 @@ def _render_templates(agent_def: AgentDef, af: AgentFile, context_dir: Path) -> 
 
     entrypoint = env.get_template("entrypoint.py.j2").render(**ctx)
     (context_dir / "entrypoint.py").write_text(entrypoint)
+
+    # Copy local @Tool Python files into the build context under tools/
+    if ctx.get("has_local_tools") and ctx.get("local_source_paths"):
+        tools_dir = context_dir / "tools"
+        tools_dir.mkdir(exist_ok=True)
+        for src_path in ctx["local_source_paths"]:
+            shutil.copy(src_path, tools_dir / Path(src_path).name)
+
+        # Bundle the ninetrix SDK package into the build context so the container
+        # can import it without needing PyPI (works before the SDK is published).
+        import importlib.util
+        _spec = importlib.util.find_spec("ninetrix")
+        if _spec and _spec.submodule_search_locations:
+            _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
+            shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
+        else:
+            console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e /path/to/sdk")
 
 
 def _build_one(
@@ -56,7 +77,7 @@ def _build_one(
     with tempfile.TemporaryDirectory(prefix=f"agentfile-build-{agent_name}-") as tmp:
         ctx = Path(tmp)
         shutil.copy(agentfile_path, ctx / "agentfile.yaml")
-        _render_templates(agent_def, af, ctx)
+        _render_templates(agent_def, af, ctx, agentfile_path)
         full_tag = agent_def.image_name(tag)
         try:
             client = _docker.from_env()
@@ -129,7 +150,7 @@ def build_cmd(agentfile_path: str, tag: str, push: bool, agent_filter: str | Non
         with tempfile.TemporaryDirectory(prefix=f"agentfile-build-{agent_name}-") as tmp:
             ctx = Path(tmp)
             shutil.copy(agentfile_path, ctx / "agentfile.yaml")
-            _render_templates(agent_def, af, ctx)
+            _render_templates(agent_def, af, ctx, agentfile_path)
             image_ref = build_image(ctx, agent_def.image_name(), tag)
             built_refs.append(image_ref)
     else:

@@ -11,6 +11,7 @@ the correct mcp_registry location automatically.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 from typing import Callable
 
 
@@ -20,6 +21,7 @@ def build_context(
     *,
     is_saas_runner: bool = False,
     has_invoke_server: bool = False,
+    agentfile_dir: str | Path | None = None,
     _warn: Callable[[str], None] | None = None,
 ) -> dict:
     """Build the Jinja2 template context for a single agent.
@@ -111,6 +113,38 @@ def build_context(
     has_s3_volumes    = any(v.provider == "s3" for v in volume_defs)
     base_image        = agent_def.resources.base_image or "python:3.12-slim"
 
+    # ── Local @Tool discovery ──────────────────────────────────────────────────
+    has_local_tools = False
+    local_tool_files: list[str] = []         # container paths: /app/tools/foo.py
+    local_tool_manifests: list[dict] = []    # tool schema dicts (name/description/parameters)
+    local_source_paths: list[str] = []       # host absolute paths (for build.py to copy)
+
+    if agentfile_dir is not None:
+        _local_sources = [t for t in agent_def.tools if t.is_local()]
+        if _local_sources:
+            try:
+                from ninetrix.discover import discover_tools_in_file as _dtif  # type: ignore[import]
+                _af_dir = Path(agentfile_dir)
+                _seen: set[str] = set()
+                for _t in _local_sources:
+                    _src = (_af_dir / _t.source).resolve()
+                    if str(_src) not in _seen:
+                        _seen.add(str(_src))
+                        _manifests = _dtif(_src)
+                        local_tool_manifests.extend(_manifests)
+                        local_tool_files.append(f"/app/tools/{_src.name}")
+                        local_source_paths.append(str(_src))
+                has_local_tools = bool(local_tool_manifests)
+            except ImportError:
+                if _warn:
+                    _warn(
+                        "ninetrix-sdk is not installed — local @Tool discovery skipped. "
+                        "Run: pip install -e /path/to/sdk  (or: pip install ninetrix-sdk)"
+                    )
+            except Exception as _exc:
+                if _warn:
+                    _warn(f"Local tool discovery failed: {_exc}")
+
     return {
         "agent":                      agent,
         "needs_node":                 needs_node,
@@ -159,4 +193,8 @@ def build_context(
         "mcp_gateway_url":            mcp_gateway_url,
         "mcp_gateway_token":          mcp_gateway_token,
         "mcp_gateway_workspace":      mcp_gateway_workspace,
+        "has_local_tools":            has_local_tools,
+        "local_tool_files":           local_tool_files,
+        "local_tool_manifests":       local_tool_manifests,
+        "local_source_paths":         local_source_paths,
     }

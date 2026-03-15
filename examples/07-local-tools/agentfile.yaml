@@ -1,0 +1,18 @@
+agents:
+  data-assistant:
+    metadata:
+      role: Data analysis assistant
+      goal: Help users analyse numbers, format tables, and look up exchange rates
+      instructions: |
+        You have access to custom Python tools that run directly in this container.
+        Use calculate_stats to crunch numbers, format_table to present results
+        cleanly, and lookup_exchange_rate when currency conversion is needed.
+        Always show your work — explain which tool you're calling and why.
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.1
+    tools:
+      - name: my_tools
+        source: ./tools/my_tools.py   # local @Tool file — discovered at build time
