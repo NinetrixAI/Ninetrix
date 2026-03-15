@@ -71,6 +71,7 @@ def _flatten_content(content: object) -> str:
 
 _SORT_COLS = {
     "updated_at":  "updated_at",
+    "started_at":  "started_at",
     "step_index":  "step_index",
     "tokens_used": "tokens_used",
     "agent_id":    "agent_id",

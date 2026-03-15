@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Highlight, type PrismTheme } from "prism-react-renderer";
 import {
   listThreads,
   getThreadTimeline,
@@ -13,6 +14,16 @@ import { timelineEventsToTraceNodes, calcTotalMs, type TraceNode } from "@/lib/t
 import ThemeToggle from "@/components/ThemeToggle";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+const JSON_THEME: PrismTheme = {
+  plain: { backgroundColor: "transparent", color: "#8A95A8" },
+  styles: [
+    { types: ["property"], style: { color: "#60A5FA" } },         // keys — blue
+    { types: ["string"], style: { color: "#4ADE80" } },            // string values — green
+    { types: ["number", "boolean", "null", "keyword"], style: { color: "#4ADE80" } },
+    { types: ["punctuation", "operator"], style: { color: "#4B5563" } },
+  ],
+};
 
 function formatDuration(ms: number | null): string {
   if (ms == null) return "—";
@@ -764,7 +775,15 @@ function TraceNodeRow({
 
 // ─── Timeline / Gantt ────────────────────────────────────────────────────────
 
-function TimelineView({ nodes }: { nodes: TraceNode[] }) {
+function TimelineView({
+  nodes,
+  selectedId,
+  onSelect,
+}: {
+  nodes: TraceNode[];
+  selectedId: string | null;
+  onSelect: (node: TraceNode) => void;
+}) {
   const totalMs = calcTotalMs(nodes);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
@@ -827,19 +846,28 @@ function TimelineView({ nodes }: { nodes: TraceNode[] }) {
             ? Math.max(0.5, (node.durationMs / totalMs) * 100)
             : 1;
           const isHovered = hoveredId === node.id;
+          const isSelected = selectedId === node.id;
 
           return (
             <div
               key={node.id}
               onMouseEnter={() => setHoveredId(node.id)}
               onMouseLeave={() => setHoveredId(null)}
+              onClick={() => onSelect(node)}
               style={{
                 display: "flex",
                 alignItems: "center",
                 marginBottom: 3,
                 paddingLeft: node.depth * 12,
-                background: isHovered ? "rgba(148,163,184,0.04)" : "transparent",
+                background: isSelected
+                  ? `${cfg.dimColor}`
+                  : isHovered
+                  ? "rgba(148,163,184,0.04)"
+                  : "transparent",
                 borderRadius: 4,
+                cursor: "pointer",
+                borderLeft: isSelected ? `2px solid ${cfg.color}` : "2px solid transparent",
+                transition: "background 0.1s",
               }}
             >
               {/* Label column */}
@@ -913,6 +941,171 @@ function TimelineView({ nodes }: { nodes: TraceNode[] }) {
   );
 }
 
+// ─── Timeline Detail Panel ───────────────────────────────────────────────────
+
+function TimelineDetailPanel({ node }: { node: TraceNode | null }) {
+  const cfg = node ? NODE_CONFIG[node.type] : null;
+
+  if (!node || !cfg) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          color: "var(--text-dim)",
+          fontSize: 12,
+          fontFamily: "var(--font-jb-mono, monospace)",
+          gap: 8,
+        }}
+      >
+        <span style={{ opacity: 0.4 }}>↑</span>
+        Click a row to inspect input / output
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "12px 16px", height: "100%", overflowY: "auto" }}>
+      {/* Node header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 12,
+          paddingBottom: 10,
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
+        <span style={{ fontSize: 12, color: cfg.color }}>{cfg.icon}</span>
+        <span
+          style={{
+            fontSize: 12,
+            fontFamily: "var(--font-jb-mono, monospace)",
+            color: "var(--text-primary)",
+            fontWeight: 600,
+          }}
+        >
+          {node.label}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            fontFamily: "var(--font-jb-mono, monospace)",
+            color: cfg.color,
+            background: cfg.dimColor,
+            padding: "1px 7px",
+            borderRadius: 3,
+          }}
+        >
+          {cfg.label}
+        </span>
+        <div style={{ flex: 1 }} />
+        {node.durationMs != null && (
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--font-jb-mono, monospace)",
+              color: "var(--text-dim)",
+            }}
+          >
+            {formatDuration(node.durationMs)}
+          </span>
+        )}
+        {(node.inputTokens != null || node.outputTokens != null) && (
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--font-jb-mono, monospace)",
+              color: "var(--text-dim)",
+            }}
+          >
+            {node.inputTokens != null && `↑${node.inputTokens}`}
+            {node.inputTokens != null && node.outputTokens != null && " "}
+            {node.outputTokens != null && `↓${node.outputTokens}`}
+          </span>
+        )}
+      </div>
+
+      {/* LLM content */}
+      {node.type === "llm" && node.llmContent && (
+        <>
+          <ContentBlock label="PROMPT" content={node.llmContent.prompt} color={cfg.color} />
+          <ContentBlock label="RESPONSE" content={node.llmContent.response} color={cfg.color} />
+        </>
+      )}
+
+      {/* Tool content */}
+      {node.type === "tool" && node.toolContent && (
+        <>
+          <ContentBlock label="INPUT" content={node.toolContent.input} color={cfg.color} />
+          <ContentBlock label="OUTPUT" content={node.toolContent.output} color={cfg.color} />
+        </>
+      )}
+
+      {/* Thinking content */}
+      {node.type === "thinking" && node.thinkingContent && (
+        <ContentBlock label="REASONING" content={node.thinkingContent.text} color={cfg.color} />
+      )}
+
+      {/* Handoff content */}
+      {node.type === "handoff" && node.handoffContent && (
+        <>
+          <ContentBlock label="HANDOFF TO" content={node.handoffContent.targetAgent} color={cfg.color} />
+          <ContentBlock label="MESSAGE" content={node.handoffContent.message} color={cfg.color} />
+        </>
+      )}
+
+      {/* Metadata */}
+      {node.model && (
+        <div
+          style={{
+            marginTop: 12,
+            display: "flex",
+            gap: 16,
+            flexWrap: "wrap",
+          }}
+        >
+          {[
+            { label: "MODEL", value: node.model },
+            node.estimatedCostUsd != null
+              ? { label: "EST. COST", value: `$${node.estimatedCostUsd.toFixed(5)}` }
+              : null,
+            { label: "STARTED", value: node.absoluteStartIso.replace("T", " ").replace("Z", "") },
+          ]
+            .filter(Boolean)
+            .map((s) => s && (
+              <div key={s.label}>
+                <div
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 600,
+                    letterSpacing: "0.07em",
+                    color: "var(--text-dim)",
+                    marginBottom: 2,
+                  }}
+                >
+                  {s.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontFamily: "var(--font-jb-mono, monospace)",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {s.value}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Trace Drawer ────────────────────────────────────────────────────────────
 
 function TraceDrawer({
@@ -929,6 +1122,33 @@ function TraceDrawer({
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<TraceNode | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Resizable split for timeline view
+  const [topHeight, setTopHeight] = useState(280);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const splitContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const onDividerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startH: topHeight };
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current || !splitContainerRef.current) return;
+      const containerH = splitContainerRef.current.clientHeight;
+      const delta = ev.clientY - dragRef.current.startY;
+      const next = Math.min(
+        Math.max(dragRef.current.startH + delta, 80),
+        containerH - 80
+      );
+      setTopHeight(next);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const fetchTimeline = useCallback(async () => {
     try {
@@ -1168,100 +1388,191 @@ function TraceDrawer({
         </div>
 
         {/* Body */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "10px 14px",
-          }}
-        >
-          {loading && (
+        {view === "timeline" ? (
+          // ── Split pane layout for timeline tab ──────────────────────────────
+          <div
+            ref={splitContainerRef}
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            {/* Top pane: Gantt chart */}
             <div
               style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                padding: "20px 0",
+                height: topHeight,
+                flexShrink: 0,
+                overflowY: "auto",
+                padding: "10px 14px",
               }}
             >
-              {[80, 65, 75, 55, 70].map((w, i) => (
-                <div
-                  key={i}
-                  className="skeleton"
-                  style={{ height: 32, borderRadius: 6, width: `${w}%` }}
-                />
-              ))}
-            </div>
-          )}
-
-          {error && (
-            <div
-              style={{
-                padding: "16px",
-                borderRadius: 8,
-                background: "rgba(239,68,68,0.08)",
-                border: "1px solid rgba(239,68,68,0.15)",
-                color: "#EF4444",
-                fontSize: 12,
-                fontFamily: "var(--font-jb-mono, monospace)",
-              }}
-            >
-              {error}
-            </div>
-          )}
-
-          {!loading && !error && nodes.length === 0 && (
-            <div
-              style={{
-                padding: "40px 0",
-                textAlign: "center",
-                color: "var(--text-dim)",
-                fontSize: 13,
-              }}
-            >
-              No trace events yet
-            </div>
-          )}
-
-          {!loading && !error && nodes.length > 0 && (
-            <>
-              {view === "trace" && (
-                <div>
-                  {nodes.map((node) => (
-                    <TraceNodeRow
-                      key={node.id}
-                      node={node}
-                      totalMs={calcTotalMs(nodes)}
-                      onSelect={setSelectedNode}
-                      isSelected={selectedNode?.id === node.id}
-                    />
+              {loading && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "20px 0" }}>
+                  {[80, 65, 75, 55, 70].map((w, i) => (
+                    <div key={i} className="skeleton" style={{ height: 32, borderRadius: 6, width: `${w}%` }} />
                   ))}
                 </div>
               )}
-
-              {view === "timeline" && <TimelineView nodes={nodes} />}
-
-              {view === "raw" && (
-                <div>
-                  <pre
-                    style={{
-                      fontSize: 11,
-                      fontFamily: "var(--font-jb-mono, monospace)",
-                      color: "var(--text-secondary)",
-                      lineHeight: 1.7,
-                      overflowX: "auto",
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      margin: 0,
-                    }}
-                  >
-                    {JSON.stringify(events, null, 2)}
-                  </pre>
+              {error && (
+                <div style={{ padding: "16px", borderRadius: 8, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.15)", color: "#EF4444", fontSize: 12, fontFamily: "var(--font-jb-mono, monospace)" }}>
+                  {error}
                 </div>
               )}
-            </>
-          )}
-        </div>
+              {!loading && !error && nodes.length === 0 && (
+                <div style={{ padding: "40px 0", textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
+                  No trace events yet
+                </div>
+              )}
+              {!loading && !error && nodes.length > 0 && (
+                <TimelineView
+                  nodes={nodes}
+                  selectedId={selectedNode?.id ?? null}
+                  onSelect={setSelectedNode}
+                />
+              )}
+            </div>
+
+            {/* Drag handle */}
+            <div
+              onMouseDown={onDividerMouseDown}
+              style={{
+                height: 6,
+                flexShrink: 0,
+                background: "var(--bg-elevated)",
+                borderTop: "1px solid var(--border-strong)",
+                borderBottom: "1px solid var(--border-strong)",
+                cursor: "row-resize",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                userSelect: "none",
+              }}
+            >
+              <div
+                style={{
+                  width: 32,
+                  height: 2,
+                  borderRadius: 2,
+                  background: "rgba(148,163,184,0.2)",
+                }}
+              />
+            </div>
+
+            {/* Bottom pane: detail panel */}
+            <div style={{ flex: 1, overflow: "hidden", background: "var(--bg-base)" }}>
+              <TimelineDetailPanel node={selectedNode} />
+            </div>
+          </div>
+        ) : (
+          // ── Normal scrollable body for trace / raw tabs ──────────────────────
+          <div
+            style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "10px 14px",
+            }}
+          >
+            {loading && (
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  padding: "20px 0",
+                }}
+              >
+                {[80, 65, 75, 55, 70].map((w, i) => (
+                  <div
+                    key={i}
+                    className="skeleton"
+                    style={{ height: 32, borderRadius: 6, width: `${w}%` }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {error && (
+              <div
+                style={{
+                  padding: "16px",
+                  borderRadius: 8,
+                  background: "rgba(239,68,68,0.08)",
+                  border: "1px solid rgba(239,68,68,0.15)",
+                  color: "#EF4444",
+                  fontSize: 12,
+                  fontFamily: "var(--font-jb-mono, monospace)",
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            {!loading && !error && nodes.length === 0 && (
+              <div
+                style={{
+                  padding: "40px 0",
+                  textAlign: "center",
+                  color: "var(--text-dim)",
+                  fontSize: 13,
+                }}
+              >
+                No trace events yet
+              </div>
+            )}
+
+            {!loading && !error && nodes.length > 0 && (
+              <>
+                {view === "trace" && (
+                  <div>
+                    {nodes.map((node) => (
+                      <TraceNodeRow
+                        key={node.id}
+                        node={node}
+                        totalMs={calcTotalMs(nodes)}
+                        onSelect={setSelectedNode}
+                        isSelected={selectedNode?.id === node.id}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {view === "raw" && (
+                  <Highlight
+                    theme={JSON_THEME}
+                    code={JSON.stringify(events, null, 2)}
+                    language="json"
+                  >
+                    {({ style, tokens, getLineProps, getTokenProps }) => (
+                      <pre
+                        style={{
+                          ...style,
+                          fontSize: 11,
+                          fontFamily: "var(--font-jb-mono, monospace)",
+                          lineHeight: 1.7,
+                          overflowX: "auto",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          margin: 0,
+                          padding: 0,
+                        }}
+                      >
+                        {tokens.map((line, i) => (
+                          <div key={i} {...getLineProps({ line })}>
+                            {line.map((token, key) => (
+                              <span key={key} {...getTokenProps({ token })} />
+                            ))}
+                          </div>
+                        ))}
+                      </pre>
+                    )}
+                  </Highlight>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {/* Footer: node count + legend */}
         <div

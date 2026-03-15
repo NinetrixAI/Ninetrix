@@ -76,8 +76,9 @@ export async function checkApiStatus(): Promise<ApiStatus> {
 }
 
 export async function listThreads(status?: string): Promise<ThreadSummary[]> {
-  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
-  return apiFetch<ThreadSummary[]>(`/threads${qs}`);
+  const params = new URLSearchParams({ sort: "started_at", order: "desc" });
+  if (status) params.set("status", status);
+  return apiFetch<ThreadSummary[]>(`/threads?${params}`);
 }
 
 export async function getThreadTimeline(threadId: string): Promise<TimelineEvent[]> {
