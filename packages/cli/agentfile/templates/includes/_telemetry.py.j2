@@ -25,6 +25,11 @@ def _post_runner_event(event_type: str, data: dict) -> None:
 # in agentfile.yaml for this to work.
 
 _SAAS_PERSIST: bool = bool(_RUNNER_TOKEN and _API_URL)
+print(
+    f"[telemetry] {'enabled → ' + _API_URL if _SAAS_PERSIST else 'disabled'}"
+    + (f"  (token={'set' if _RUNNER_TOKEN else 'missing'}, url={'set' if _API_URL else 'missing'})" if not _SAAS_PERSIST else ""),
+    file=sys.stderr,
+)
 
 
 class _SaaSCheckpointer:

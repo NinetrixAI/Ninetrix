@@ -36,8 +36,14 @@ def _render_templates(
         agentfile_dir=agentfile_dir,
         _warn=lambda msg: console.print(f"  [yellow]Warning:[/yellow] {msg}"),
     )
-    # Support both Pydantic model (typed) and plain dict (fallback)
-    ctx = _ctx.model_dump(mode="python") if hasattr(_ctx, "model_dump") else _ctx
+    # Support both Pydantic model (typed) and plain dict (fallback).
+    # Re-inject the original AgentDef after dump so Jinja2 templates can
+    # call methods like agent.image_name() — model_dump() would flatten it to a dict.
+    if hasattr(_ctx, "model_dump"):
+        ctx = _ctx.model_dump(mode="python")
+        ctx["agent"] = _ctx.agent
+    else:
+        ctx = _ctx
 
     dockerfile = env.get_template("Dockerfile.j2").render(**ctx)
     (context_dir / "Dockerfile").write_text(dockerfile)
@@ -45,22 +51,22 @@ def _render_templates(
     entrypoint = env.get_template("entrypoint.py.j2").render(**ctx)
     (context_dir / "entrypoint.py").write_text(entrypoint)
 
+    # Always bundle the ninetrix SDK into the build context so every container
+    # has it available at runtime (needed for local @Tool dispatch, telemetry, etc.)
+    import importlib.util
+    _spec = importlib.util.find_spec("ninetrix")
+    if _spec and _spec.submodule_search_locations:
+        _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
+        shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
+    else:
+        console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e /path/to/sdk")
+
     # Copy local @Tool Python files into the build context under tools/
     if ctx.get("has_local_tools") and ctx.get("local_source_paths"):
         tools_dir = context_dir / "tools"
         tools_dir.mkdir(exist_ok=True)
         for src_path in ctx["local_source_paths"]:
             shutil.copy(src_path, tools_dir / Path(src_path).name)
-
-        # Bundle the ninetrix SDK package into the build context so the container
-        # can import it without needing PyPI (works before the SDK is published).
-        import importlib.util
-        _spec = importlib.util.find_spec("ninetrix")
-        if _spec and _spec.submodule_search_locations:
-            _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
-            shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
-        else:
-            console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e /path/to/sdk")
 
 
 def _build_one(

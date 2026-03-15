@@ -25,6 +25,7 @@ from agentfile.commands.rollback import rollback_cmd
 from agentfile.commands.doctor import doctor_cmd
 from agentfile.commands.validate import validate_cmd
 from agentfile.commands.auth import auth_cmd
+from agentfile.commands.config import config_cmd
 from agentfile.commands.compose import compose_cmd
 from agentfile.commands.gateway import gateway_cmd
 from agentfile.commands.dev import dev_command
@@ -85,6 +86,7 @@ def cli() -> None:
       ninetrix validate      lint agentfile.yaml without building
       ninetrix doctor        check Docker, API, pool, and env vars
       ninetrix auth          manage API authentication
+      ninetrix config        view and set persistent CLI configuration
     """
     pass
 
@@ -106,6 +108,7 @@ cli.add_command(rollback_cmd, name="rollback")
 cli.add_command(doctor_cmd,   name="doctor")
 cli.add_command(validate_cmd, name="validate")
 cli.add_command(auth_cmd,     name="auth")
+cli.add_command(config_cmd,   name="config")
 cli.add_command(compose_cmd,  name="compose")
 cli.add_command(gateway_cmd,  name="gateway")
 cli.add_command(dev_command,   name="dev")

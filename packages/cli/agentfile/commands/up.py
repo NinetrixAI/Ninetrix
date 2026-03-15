@@ -137,14 +137,36 @@ def _build_agent_env(
                 env[var_name] = val
 
     # Forward SaaS credentials so agents can phone home with thread events.
-    # Rewrite localhost → host.docker.internal so containers can reach the host API.
-    for _var in ("AGENTFILE_RUNNER_TOKEN", "AGENTFILE_API_URL"):
-        _val = os.environ.get(_var) or _load_dotenv_key(_var)
-        if _val:
-            if _var == "AGENTFILE_API_URL":
-                _val = _val.replace("localhost", "host.docker.internal") \
-                           .replace("127.0.0.1", "host.docker.internal")
-            env[_var] = _val
+    # Machine secret always wins when local API is running — env/.env often holds a
+    # stale SaaS token that the local API won't accept.
+    from agentfile.core.config import get_api_url as _get_api_url
+    _api_url = (
+        os.environ.get("AGENTFILE_API_URL")
+        or _load_dotenv_key("AGENTFILE_API_URL")
+        or _get_api_url()
+    )
+    if _api_url:
+        env["AGENTFILE_API_URL"] = (
+            _api_url.replace("localhost", "host.docker.internal")
+                    .replace("127.0.0.1", "host.docker.internal")
+        )
+        # 1. Machine secret — always wins for local dev (written by `ninetrix dev`)
+        _secret_file = Path.home() / ".agentfile" / ".api-secret"
+        if _secret_file.exists():
+            _secret = _secret_file.read_text().strip()
+            if _secret:
+                env["AGENTFILE_RUNNER_TOKEN"] = _secret
+        # 2. Explicit env var / .env file — used when not local dev
+        if not env.get("AGENTFILE_RUNNER_TOKEN"):
+            _runner_token = os.environ.get("AGENTFILE_RUNNER_TOKEN") or _load_dotenv_key("AGENTFILE_RUNNER_TOKEN")
+            if _runner_token:
+                env["AGENTFILE_RUNNER_TOKEN"] = _runner_token
+        # 3. Token saved by `ninetrix auth login` (remote SaaS fallback)
+        if not env.get("AGENTFILE_RUNNER_TOKEN"):
+            from agentfile.core.auth import read_token as _read_token
+            _stored_token = _read_token(_api_url)
+            if _stored_token:
+                env["AGENTFILE_RUNNER_TOKEN"] = _stored_token
 
     # Forward MCP gateway connection vars — rewrite localhost so containers can reach
     # a gateway running on the host (e.g. started by `ninetrix dev`).

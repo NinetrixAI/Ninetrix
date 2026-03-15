@@ -179,19 +179,23 @@ def build_context(
     if agentfile_dir is not None:
         _local_sources = [t for t in agent_def.tools if t.is_local()]
         if _local_sources:
+            _af_dir = Path(agentfile_dir)
+            _seen: set[str] = set()
+            # Collect source paths first — these don't require the SDK.
+            for _t in _local_sources:
+                _src = (_af_dir / _t.source).resolve()
+                if str(_src) not in _seen:
+                    _seen.add(str(_src))
+                    local_tool_files.append(f"/app/tools/{_src.name}")
+                    local_source_paths.append(str(_src))
+            # has_local_tools drives the async entrypoint path (with telemetry).
+            # Set it whenever local tool sources are declared, regardless of SDK.
+            has_local_tools = bool(local_source_paths)
+            # Attempt manifest discovery — requires ninetrix-sdk.
             try:
                 from ninetrix.discover import discover_tools_in_file as _dtif  # type: ignore[import]
-                _af_dir = Path(agentfile_dir)
-                _seen: set[str] = set()
-                for _t in _local_sources:
-                    _src = (_af_dir / _t.source).resolve()
-                    if str(_src) not in _seen:
-                        _seen.add(str(_src))
-                        _manifests = _dtif(_src)
-                        local_tool_manifests.extend(_manifests)
-                        local_tool_files.append(f"/app/tools/{_src.name}")
-                        local_source_paths.append(str(_src))
-                has_local_tools = bool(local_tool_manifests)
+                for _src_str in local_source_paths:
+                    local_tool_manifests.extend(_dtif(Path(_src_str)))
             except ImportError:
                 if _warn:
                     _warn(

@@ -51,11 +51,14 @@ COPY agentfile.yaml /app/agentfile.yaml
 
 # Copy agent entrypoint
 COPY entrypoint.py /app/entrypoint.py
+
+# Bundle ninetrix SDK — importable via /app on sys.path (no PyPI required)
+# COPY ninetrix/ /app/ninetrix/
+RUN pip install --no-cache-dir ninetrix-sdk
 {% if has_local_tools %}
 
-# Copy local @Tool Python files and bundled ninetrix SDK
+# Copy local @Tool Python files
 COPY tools/ /app/tools/
-COPY ninetrix/ /app/ninetrix/
 {% endif %}
 
 ENV PYTHONUNBUFFERED=1
