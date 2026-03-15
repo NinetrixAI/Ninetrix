@@ -48,8 +48,21 @@ services:
     image: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
     environment:
       MCP_GATEWAY_URL: ws://mcp-gateway:8080
-      MCP_WORKSPACE_ID: local
+      MCP_WORKSPACE_ID: default
       MCP_WORKER_NAME: default
+      # Credential env vars — injected by ninetrix dev via _build_proc_env()
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_TEAM_ID: ${SLACK_TEAM_ID:-}
+      NOTION_API_KEY: ${NOTION_API_KEY:-}
+      LINEAR_API_KEY: ${LINEAR_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      POSTGRES_CONNECTION_STRING: ${POSTGRES_CONNECTION_STRING:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+      GOOGLE_DRIVE_ACCESS_TOKEN: ${GOOGLE_DRIVE_ACCESS_TOKEN:-}
     volumes:
       - ${HOME}/.agentfile/mcp-worker.yaml:/app/mcp-worker.yaml:ro
     depends_on:

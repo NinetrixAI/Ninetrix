@@ -32,7 +32,7 @@ _DEFAULT_SCAFFOLD = """\
 #   token          → MCP_GATEWAY_TOKEN
 
 gateway_url: "ws://mcp-gateway:8080"
-workspace_id: "local"
+workspace_id: "default"
 worker_name: "default"
 token: "dev-secret"
 

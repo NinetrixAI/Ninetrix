@@ -19,6 +19,16 @@ from agentfile.core.models import AgentFile, AgentDef, _parse_memory
 
 console = Console()
 
+
+def _is_gateway_running() -> bool:
+    """Return True if the local MCP Gateway is reachable on localhost:8080."""
+    try:
+        r = httpx.get("http://localhost:8080/health", timeout=1.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
 _KEY_ENV_VARS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai":    "OPENAI_API_KEY",
@@ -138,6 +148,8 @@ def _build_agent_env(
 
     # Forward MCP gateway connection vars — rewrite localhost so containers can reach
     # a gateway running on the host (e.g. started by `ninetrix dev`).
+    # Auto-detect: if the local gateway is up, wire agents to it automatically.
+    _gw_running = _is_gateway_running()
     for _var in ("MCP_GATEWAY_URL", "MCP_GATEWAY_TOKEN", "MCP_GATEWAY_WORKSPACE"):
         _val = os.environ.get(_var) or _load_dotenv_key(_var)
         if _val:
@@ -145,6 +157,9 @@ def _build_agent_env(
                 _val = _val.replace("localhost", "host.docker.internal") \
                            .replace("127.0.0.1", "host.docker.internal")
             env.setdefault(_var, _val)
+    if _gw_running:
+        env.setdefault("MCP_GATEWAY_URL", "http://host.docker.internal:8080")
+        env.setdefault("MCP_GATEWAY_WORKSPACE", "default")
 
     for peer_name, peer_url in peer_urls.items():
         if peer_name != agent_name:

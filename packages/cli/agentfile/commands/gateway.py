@@ -86,18 +86,29 @@ def _find_active_compose_file() -> Path | None:
 def restart_worker(compose: Path | None = None) -> bool:
     """Restart the mcp-worker service with fresh credentials.
 
-    Tries the dev-stack compose first, then the standalone gateway compose.
-    Returns True on success, False if no compose file found or restart failed.
+    Strategy (in order):
+      1. docker compose -f <dev-or-gateway-compose> up -d --force-recreate mcp-worker
+      2. docker restart mcp-worker   (fallback when no compose file found)
+
+    Returns True on success, False if all methods failed.
     """
     if compose is None:
         compose = _find_active_compose_file()
-    if compose is None:
-        return False
 
-    proc_env = _build_proc_env(compose)
+    if compose is not None:
+        proc_env = _build_proc_env(compose)
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose), "up", "-d", "--force-recreate", "mcp-worker"],
+            env=proc_env,
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return True
+        # compose failed — fall through to docker restart
+
+    # Fallback: direct docker restart (no env var injection, but picks up yaml changes)
     result = subprocess.run(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--force-recreate", "mcp-worker"],
-        env=proc_env,
+        ["docker", "restart", "mcp-worker"],
         capture_output=True,
     )
     return result.returncode == 0
@@ -164,13 +175,35 @@ def _load_dotenv() -> dict[str, str]:
 
 
 def _collect_creds(server_names: list[str], dotenv: dict[str, str]) -> dict[str, str]:
-    """Collect credential env vars for the given servers from host env + .env."""
+    """Collect credential env vars for the given servers from host env + .env.
+
+    Uses the mcp_catalog for canonical env var names and alias resolution
+    (e.g. GITHUB_TOKEN → GITHUB_PERSONAL_ACCESS_TOKEN).  Falls back to the
+    legacy _SERVER_CRED_VARS dict for servers not in the catalog.
+    """
+    from agentfile.core import mcp_catalog as _cat
+
     result: dict[str, str] = {}
     for name in server_names:
-        for var in _SERVER_CRED_VARS.get(name, []):
-            val = os.environ.get(var) or dotenv.get(var)
-            if val:
-                result[var] = val
+        entry = _cat.get(name)
+        if entry:
+            # Catalog path: resolve each required var, honouring aliases
+            for var in entry.required_env:
+                # Try canonical name first, then all aliases
+                sources = [var] + [
+                    alias for alias, canon in entry.env_aliases.items() if canon == var
+                ]
+                for src in sources:
+                    val = os.environ.get(src) or dotenv.get(src)
+                    if val:
+                        result[var] = val   # store under canonical name
+                        break
+        else:
+            # Legacy fallback for servers not in the catalog
+            for var in _SERVER_CRED_VARS.get(name, []):
+                val = os.environ.get(var) or dotenv.get(var)
+                if val:
+                    result[var] = val
     return result
 
 

@@ -1,0 +1,347 @@
+# ── Agentic loop ──────────────────────────────────────────────────────────────
+
+async def _run_turn(
+    user_input: str,
+    sessions_by_tool: dict,
+    tool_definitions: list,
+{% if has_composio_tools %}
+    composio_toolset=None,
+    composio_tool_names: set = set(),
+{% endif %}
+{% if has_persistence %}
+    checkpointer=None,
+{% endif %}
+{% if has_planned_execution or has_verifier %}
+    plan_goal: str = "",
+{% endif %}
+    result_collector: list | None = None,
+    thread_id: str = "",
+    saas_cp=None,           # _SaaSCheckpointer | None — transparent SaaS persistence
+    prior_messages: list | None = None,   # chat session history to restore
+    messages_out:   list | None = None,   # caller receives final messages here
+    reasoning_hint: str = "",  # ephemeral pre-turn reasoning; injected as system msg, never stored
+) -> None:
+    messages: list = []
+    if SYSTEM_PROMPT:
+        messages.append({"role": "system", "content": SYSTEM_PROMPT})
+    if reasoning_hint:
+        # Inject as a second ephemeral system message — never stored in history,
+        # so it doesn't pollute the user message or subsequent turns.
+        messages.append({"role": "system", "content": f"[Pre-turn reasoning — internal scratchpad]\n{reasoning_hint}"})
+{% if has_persistence %}
+    if checkpointer is not None:
+        for _hm in checkpointer.history:
+            if _hm.get("role") != "system":
+                messages.append(_hm)
+    _user_msg: dict = {"role": "user", "content": user_input}
+    messages.append(_user_msg)
+    if checkpointer is not None:
+        checkpointer.history.append(_user_msg)
+        checkpointer.history_meta.append({"ts": _dt.now(_tz.utc).isoformat()})
+    if saas_cp is not None:
+        saas_cp.record("user")
+{% else %}
+    # Restore prior conversation history (in-memory session context)
+    if prior_messages:
+        for _hm in prior_messages:
+            if _hm.get("role") != "system":
+                messages.append(_hm)
+    messages.append({"role": "user", "content": user_input})
+{% endif %}
+
+{% if has_planned_execution %}
+    _no_tool_streak = 0   # consecutive turns with no tool call (plan mode only)
+{% endif %}
+    _scp_in = _scp_out = 0  # per-turn token counts for saas_cp telemetry
+    for _turn in range(MAX_TURNS):
+        response = await litellm.acompletion(
+            model=LITELLM_MODEL,
+            messages=_trim_messages(messages),
+            tools=tool_definitions or None,
+            max_tokens=MAX_TOKENS,
+            temperature=TEMP,
+            num_retries=3,
+        )
+
+        choice = response.choices[0]
+        msg    = choice.message
+{% if has_persistence %}
+        _in_tok  = (getattr(response.usage, "prompt_tokens",    0) or 0) if response.usage else 0
+        _out_tok = (getattr(response.usage, "completion_tokens", 0) or 0) if response.usage else 0
+        if checkpointer is not None:
+            checkpointer.variables["total_input_tokens"]  += _in_tok
+            checkpointer.variables["total_output_tokens"] += _out_tok
+{% endif %}
+        if saas_cp is not None and response.usage:
+            _scp_in  = (getattr(response.usage, "prompt_tokens",    0) or 0)
+            _scp_out = (getattr(response.usage, "completion_tokens", 0) or 0)
+            saas_cp.tokens_used += _scp_in + _scp_out
+        else:
+            _scp_in = _scp_out = 0
+
+        _assistant_msg: dict = {
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                }
+                for tc in (msg.tool_calls or [])
+            ] or None,
+        }
+        messages.append(_assistant_msg)
+{% if has_persistence %}
+        if checkpointer is not None:
+            checkpointer.history.append(_assistant_msg)
+            checkpointer.history_meta.append({
+                "ts": _dt.now(_tz.utc).isoformat(),
+                "tokens_in": _in_tok,
+                "tokens_out": _out_tok,
+            })
+            await checkpointer.save("in_progress")
+{% endif %}
+        if saas_cp is not None:
+            saas_cp.record("assistant", in_tok=_scp_in, out_tok=_scp_out)
+            saas_cp.step(messages, "in_progress", in_tok=_scp_in, out_tok=_scp_out)
+
+        if choice.finish_reason in ("stop", "end_turn") or not msg.tool_calls:
+            if msg.content:
+                if result_collector is not None:
+                    result_collector.append(msg.content)
+                else:
+                    _console.print(msg.content, markup=False, highlight=False)
+{% if has_planned_execution %}
+            # Plan mode: if no tool was called, the LLM may be mid-execution
+            # (wrote intermediate text instead of calling the next tool).
+            # Inject a continuation prompt and keep going — but cap at 2
+            # consecutive no-tool turns to avoid infinite loops.
+            if not msg.tool_calls:
+                _no_tool_streak += 1
+                if _no_tool_streak < 2 and _turn < MAX_TURNS - 1:
+                    _cont_msg: dict = {"role": "user", "content": "Continue. Call the next tool in the plan now."}
+                    messages.append(_cont_msg)
+{% if has_persistence %}
+                    if checkpointer is not None:
+                        checkpointer.history.append(_cont_msg)
+                        checkpointer.history_meta.append({"ts": _dt.now(_tz.utc).isoformat()})
+{% endif %}
+                    if saas_cp is not None:
+                        saas_cp.record("user")
+                    continue
+{% endif %}
+{% if has_persistence %}
+            if checkpointer is not None:
+                await checkpointer.save("completed")
+{% endif %}
+            if saas_cp is not None:
+                saas_cp.step(messages, "completed", in_tok=_scp_in, out_tok=_scp_out)
+            if messages_out is not None:
+                messages_out[:] = [m for m in messages if m.get("role") != "system"]
+            return
+
+        if msg.content:
+            if result_collector is None:
+                _console.print(msg.content, end="", markup=False, highlight=False)
+
+{% if has_planned_execution %}
+        _plan_aborted = False
+        if msg.tool_calls:
+            _no_tool_streak = 0   # reset — agent is still making progress
+{% endif %}
+        for tc in (msg.tool_calls or []):
+{% if has_planned_execution %}
+            if _plan_aborted:
+                _rej: dict = {"role": "tool", "tool_call_id": tc.id,
+                              "content": "Plan aborted."}
+                messages.append(_rej)
+{% if has_persistence %}
+                if checkpointer is not None:
+                    checkpointer.history.append(_rej)
+                    checkpointer.history_meta.append({"ts": _dt.now(_tz.utc).isoformat()})
+{% endif %}
+                if saas_cp is not None:
+                    saas_cp.record("tool")
+                continue
+{% endif %}
+            fn_name = tc.function.name
+            try:
+                fn_args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                fn_args = {}
+{% if agent.governance.human_approval.enabled and agent.governance.human_approval.actions %}
+            if _APPROVAL_ENABLED and fn_name in {{ agent.governance.human_approval.actions | tojson }}:
+{% if has_persistence %}
+                if checkpointer is not None:
+                    _approved = await checkpointer.wait_for_approval(fn_name, fn_args)
+                else:
+                    _approved = _stdin_approve(fn_name)
+{% else %}
+                _approved = _stdin_approve(fn_name)
+{% endif %}
+                if not _approved:
+                    _rejection: dict = {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": "Tool call rejected by human reviewer.",
+                    }
+                    messages.append(_rejection)
+{% if has_persistence %}
+                    if checkpointer is not None:
+                        checkpointer.history.append(_rejection)
+                        checkpointer.history_meta.append({"ts": _dt.now(_tz.utc).isoformat()})
+{% endif %}
+                    if saas_cp is not None:
+                        saas_cp.record("tool")
+                    continue
+{% endif %}
+            if result_collector is None:
+                _console.print(f"\n  [bold cyan]⚡ {fn_name}[/bold cyan]")
+            _args_preview = json.dumps(fn_args, ensure_ascii=False)[:200]
+            print(f"[tool] → {fn_name}({_args_preview})", flush=True)
+            _tool_t0 = time.perf_counter()
+            if fn_name in sessions_by_tool:
+                # MCP tool
+                session = sessions_by_tool[fn_name]
+                try:
+                    result = await asyncio.wait_for(
+                        session.call_tool(fn_name, fn_args),
+                        timeout=TOOL_TIMEOUT,
+                    )
+                    result_str = _extract_text(result.content)
+                except asyncio.TimeoutError:
+                    result_str = f"Tool '{fn_name}' timed out after {TOOL_TIMEOUT}s."
+                    print(f"[tool] ✗ {fn_name}: timed out after {TOOL_TIMEOUT}s",
+                          file=sys.stderr, flush=True)
+                except BaseException as exc:
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    result_str = f"Tool error: {type(exc).__name__}: {exc}"
+                    print(f"[tool] ✗ {fn_name}: {type(exc).__name__}: {exc}",
+                          file=sys.stderr, flush=True)
+{% if has_composio_tools %}
+            elif fn_name in composio_tool_names and composio_toolset is not None:
+                # Composio tool
+                result_str, _ = _run_composio_tool(composio_toolset, fn_name, fn_args)
+{% endif %}
+{% if has_collaborators %}
+            elif fn_name == "transfer_to_agent":
+                # Delegate to a collaborator agent
+{% if has_persistence %}
+                _tid = thread_id or THREAD_ID
+{% else %}
+                _tid = thread_id or uuid.uuid4().hex
+{% endif %}
+                result_str = await _transfer_to_agent(
+                    fn_args.get("agent", ""),
+                    fn_args.get("message", ""),
+                    fn_args.get("context", {}),
+                    _tid,
+                )
+{% if collaborators | length >= 2 %}
+            elif fn_name == "transfer_to_agents_parallel":
+                # Parallel delegation to multiple agents
+{% if has_persistence %}
+                _tid = thread_id or THREAD_ID
+{% else %}
+                _tid = thread_id or uuid.uuid4().hex
+{% endif %}
+                result_str = await _transfer_parallel(fn_args.get("transfers", []), _tid)
+{% endif %}
+{% endif %}
+{% if has_local_tools %}
+            elif fn_name in _local_tool_registry.names():
+                # Local @Tool Python function
+                try:
+                    _ltd = _local_tool_registry.get(fn_name)
+                    _local_result = _ltd.call(**fn_args)
+                    result_str = str(_local_result) if _local_result is not None else "(done)"
+                except Exception as _le:
+                    result_str = f"Tool error: {type(_le).__name__}: {_le}"
+{% endif %}
+            else:
+                result_str = f"Error: tool '{fn_name}' is not available."
+
+            _tool_dur_ms = int((time.perf_counter() - _tool_t0) * 1000)
+{% if has_persistence %}
+            if checkpointer is not None:
+                checkpointer.variables.setdefault("tool_call_durations", {})[fn_name] = _tool_dur_ms
+{% endif %}
+{% if has_verifier %}
+            _is_tool_error = result_str.startswith("Tool error:") or result_str.startswith("Error:")
+            if plan_goal and not _is_tool_error:
+                _v_ok, _v_reason, _v_in, _v_out = await _verify_step(
+                    plan_goal, fn_name, fn_args, result_str
+                )
+                if result_collector is None:
+                    _console.print(f"  [bold {'green' if _v_ok else 'red'}]{'✓' if _v_ok else '✗'}[/] [dim]{_v_reason}[/dim]")
+                if checkpointer is not None:
+                    checkpointer.variables.setdefault("verifications", []).append({
+                        "tool": fn_name, "ok": _v_ok, "reason": _v_reason,
+                    })
+                    checkpointer.variables["verifier_input_tokens"] = (
+                        checkpointer.variables.get("verifier_input_tokens", 0) + _v_in
+                    )
+                    checkpointer.variables["verifier_output_tokens"] = (
+                        checkpointer.variables.get("verifier_output_tokens", 0) + _v_out
+                    )
+                if not _v_ok:
+{% if on_step_failure == "abort" %}
+{% if has_planned_execution %}
+                    _plan_aborted = True
+{% endif %}
+                    result_str = f"Step verification failed: {_v_reason}"
+{% elif on_step_failure == "retry_once" %}
+                    result_str = f"Step failed: {_v_reason}. Please retry or use an alternative approach."
+{% else %}
+                    pass  # on_step_failure == "continue": logged above, keep going
+{% endif %}
+{% endif %}
+            # Strip lone surrogates — some APIs return binary-ish content that
+            # Python decodes with surrogateescape, producing chars like \udcXX
+            # that httpx/json cannot encode as valid UTF-8.
+            result_str = result_str.encode("utf-8", "replace").decode("utf-8")
+            _result_preview = result_str[:300].replace("\n", " ")
+            if result_str.startswith("Tool error:") or result_str.startswith("Error:"):
+                print(f"[tool] ✗ {fn_name}: {_result_preview}", file=sys.stderr, flush=True)
+            else:
+                print(f"[tool] ← {fn_name}: {_result_preview}", flush=True)
+            _tool_result: dict = {"role": "tool", "tool_call_id": tc.id, "content": result_str}
+            messages.append(_tool_result)
+{% if has_persistence %}
+            if checkpointer is not None:
+                checkpointer.history.append(_tool_result)
+                checkpointer.history_meta.append({
+                    "ts": _dt.now(_tz.utc).isoformat(),
+                    "duration_ms": _tool_dur_ms,
+                })
+{% endif %}
+            if saas_cp is not None:
+                saas_cp.record("tool", duration_ms=_tool_dur_ms)
+
+{% if has_persistence %}
+        if checkpointer is not None:
+            await checkpointer.save("in_progress")
+{% endif %}
+        if saas_cp is not None:
+            saas_cp.step(messages, "in_progress")
+{% if has_planned_execution %}
+        if _plan_aborted:
+            if result_collector is None:
+                _console.print("[bold red]✗ Plan aborted:[/bold red] step verification failed.")
+{% if has_persistence %}
+            if checkpointer is not None:
+                await checkpointer.save("completed")
+{% endif %}
+            if saas_cp is not None:
+                saas_cp.step(messages, "completed", in_tok=_scp_in, out_tok=_scp_out)
+            if messages_out is not None:
+                messages_out[:] = [m for m in messages if m.get("role") != "system"]
+            return
+{% endif %}
+        continue
+
+    if messages_out is not None:
+        messages_out[:] = [m for m in messages if m.get("role") != "system"]
+    print(f"[warning] Reached maximum turns ({MAX_TURNS}). Stopping.")

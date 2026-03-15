@@ -94,6 +94,15 @@ def _is_local_api_running() -> bool:
         return False
 
 
+def _is_gateway_running() -> bool:
+    """Return True if the local MCP Gateway is reachable on localhost:8080."""
+    try:
+        r = httpx.get("http://localhost:8080/health", timeout=1.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
 def _read_machine_secret() -> str | None:
     """Return the machine secret written by the local API on startup."""
     if _SECRET_FILE.exists():
@@ -269,13 +278,18 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
 
     # MCP Gateway — always forward gateway vars so `ninetrix run --image` works
     # from any directory, even if the local agentfile.yaml doesn't have mcp_gateway:.
+    # Auto-detect: if `ninetrix dev` is running, wire up the gateway automatically.
     _gw_url_src = (
         os.environ.get("MCP_GATEWAY_URL")
         or _load_dotenv_key("MCP_GATEWAY_URL")
         or (af.mcp_gateway.url if af.mcp_gateway else None)
     )
+    _gw_running = _is_gateway_running()
     if _gw_url_src:
         env["MCP_GATEWAY_URL"] = _docker_url(_gw_url_src)
+    elif _gw_running:
+        env.setdefault("MCP_GATEWAY_URL", "http://host.docker.internal:8080")
+
     _gw_token_src = (
         os.environ.get("MCP_GATEWAY_TOKEN")
         or _load_dotenv_key("MCP_GATEWAY_TOKEN")
@@ -283,6 +297,7 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     )
     if _gw_token_src:
         env["MCP_GATEWAY_TOKEN"] = _gw_token_src
+
     _gw_ws_src = (
         os.environ.get("MCP_GATEWAY_WORKSPACE")
         or _load_dotenv_key("MCP_GATEWAY_WORKSPACE")
@@ -290,6 +305,9 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     )
     if _gw_ws_src:
         env["MCP_GATEWAY_WORKSPACE"] = _gw_ws_src
+    elif _gw_running:
+        # Dev stack always resolves REQUIRE_AUTH=false tokens to workspace "default"
+        env.setdefault("MCP_GATEWAY_WORKSPACE", "default")
 
     for pair in extra_env:
         if "=" in pair:

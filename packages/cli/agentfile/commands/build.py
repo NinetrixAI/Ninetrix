@@ -28,7 +28,7 @@ def _render_templates(
     )
 
     agentfile_dir = Path(agentfile_path).parent if agentfile_path else None
-    ctx = build_context(
+    _ctx = build_context(
         af,
         agent_def,
         is_saas_runner=False,
@@ -36,6 +36,8 @@ def _render_templates(
         agentfile_dir=agentfile_dir,
         _warn=lambda msg: console.print(f"  [yellow]Warning:[/yellow] {msg}"),
     )
+    # Support both Pydantic model (typed) and plain dict (fallback)
+    ctx = _ctx.model_dump(mode="python") if hasattr(_ctx, "model_dump") else _ctx
 
     dockerfile = env.get_template("Dockerfile.j2").render(**ctx)
     (context_dir / "Dockerfile").write_text(dockerfile)

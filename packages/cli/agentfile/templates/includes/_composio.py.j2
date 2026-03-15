@@ -1,0 +1,88 @@
+{% if has_composio_tools %}
+def _start_composio_tools() -> tuple[object, list, set]:
+    """
+    Initialize Composio client and return (client, tool_schemas, tool_name_set).
+    Uses the Composio base package API (v1.0+). Schemas are formatted for the active provider.
+    """
+    if not COMPOSIO_API_KEY:
+        print("[composio] Warning: COMPOSIO_API_KEY is not set — skipping Composio tools.",
+              file=sys.stderr)
+        return None, [], set()
+
+    try:
+        from composio import Composio
+    except ImportError as exc:
+        print(f"[composio] Warning: could not import Composio SDK: {exc}", file=sys.stderr)
+        return None, [], set()
+
+    client = Composio(api_key=COMPOSIO_API_KEY)
+    all_schemas: list = []
+    tool_names: set = set()
+
+    for td in _COMPOSIO_TOOL_DEFS:
+        app_name = td["app"]
+        actions = td.get("actions") or []
+        try:
+            if actions:
+                tools = client.tools.get_raw_composio_tools(tools=actions)
+            else:
+                tools = client.tools.get_raw_composio_tools(toolkits=[app_name])
+        except Exception as exc:
+            print(f"[composio] Warning: failed to load tools for '{app_name}': {exc}",
+                  file=sys.stderr)
+            continue
+
+        loaded_names = []
+        for tool in tools:
+            slug = tool.slug
+            desc = tool.description or ""
+            # input_parameters is a flat {prop_name: schema} dict — wrap into JSON Schema
+            raw_params = tool.input_parameters or {}
+            if isinstance(raw_params, dict) and "type" in raw_params:
+                params = raw_params  # already a full JSON Schema
+            else:
+                params = {"type": "object", "properties": raw_params}
+
+            schema = {
+                "type": "function",
+                "function": {
+                    "name": slug,
+                    "description": desc,
+                    "parameters": params,
+                },
+            }
+
+            all_schemas.append(schema)
+            tool_names.add(slug)
+            loaded_names.append(slug)
+
+        print(f"[composio] Loaded {len(loaded_names)} action(s) from {app_name}: "
+              f"{', '.join(loaded_names)}")
+
+    return client, all_schemas, tool_names
+
+
+def _run_composio_tool(client, tool_name: str, tool_args: dict) -> tuple[str, bool]:
+    """Execute a Composio action via client.tools.execute() and return (content_str, is_error)."""
+    try:
+        result = client.tools.execute(
+            slug=tool_name,
+            arguments=tool_args,
+            user_id=COMPOSIO_ENTITY_ID,
+            dangerously_skip_version_check=True,
+        )
+        if isinstance(result, dict):
+            is_error = not result.get("successful", True)
+            data = result.get("data", result)
+            content = json.dumps(data) if not isinstance(data, str) else data
+        else:
+            content = str(result)
+            is_error = False
+        return content, is_error
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return f"Composio error: {type(exc).__name__}: {exc}", True
+
+
+{% endif %}
