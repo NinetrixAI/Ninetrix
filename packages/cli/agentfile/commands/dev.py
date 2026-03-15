@@ -156,7 +156,6 @@ def _check_docker() -> None:
 
 def _compose_env(secret: str) -> dict:
     """Build env for docker compose — injects host secret + MCP credentials."""
-    import os
     from agentfile.commands.gateway import _build_proc_env
     env = _build_proc_env()
     env["AGENTFILE_RUNNER_TOKENS"] = secret

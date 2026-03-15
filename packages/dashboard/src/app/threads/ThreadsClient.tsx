@@ -389,7 +389,7 @@ function TopNav({
               ? "checking…"
               : apiStatus.connected
               ? `API · ${apiStatus.latencyMs}ms`
-              : "API offline"}
+              : "run: ninetrix dev"}
           </span>
         </div>
 
@@ -2107,7 +2107,7 @@ export default function ThreadsClient() {
                 {error}
               </div>
               <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                Make sure the API is running:{" "}
+                Run{" "}
                 <code
                   style={{
                     fontFamily: "var(--font-jb-mono, monospace)",
@@ -2117,8 +2117,9 @@ export default function ThreadsClient() {
                     borderRadius: 3,
                   }}
                 >
-                  cd api && uvicorn main:app --reload --port 8000
+                  ninetrix dev
                 </code>
+                {" "}to start the local stack
               </div>
             </div>
           )}
