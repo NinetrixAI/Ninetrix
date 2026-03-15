@@ -334,7 +334,9 @@ def up_cmd(agentfile_path: str, tag: str, detach: bool) -> None:
         "agents": agents_state,
         "started_at": time.time(),
     }
-    _state_file(swarm).write_text(json.dumps(state, indent=2))
+    _tmp = _state_file(swarm).with_suffix(".tmp")
+    _tmp.write_text(json.dumps(state, indent=2))
+    _tmp.replace(_state_file(swarm))
 
     console.print()
     console.print(f"  [bold green]Warm pool ready.[/bold green] Swarm: [bold]{swarm}[/bold]")

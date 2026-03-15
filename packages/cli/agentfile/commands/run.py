@@ -125,7 +125,11 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
                 for key, value in creds.items():
                     env[key] = value
     except Exception:
-        pass  # API not running or unreachable — skip silently
+        console.print(
+            "  [yellow]⚠[/yellow]  Could not fetch integration credentials — "
+            "agents may fail at first tool call. "
+            "Run [bold]ninetrix dev[/bold] to start the local stack."
+        )
 
 
 @click.command("run")

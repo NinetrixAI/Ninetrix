@@ -171,23 +171,50 @@ def _compose(compose_file: Path, *args: str, secret: str = "", check: bool = Tru
 
 
 def _compose_up(compose_file: Path, pull: bool, secret: str) -> None:
+    from rich.live import Live
+    from rich.spinner import Spinner
+
     if pull:
-        console.print("[dim]Pulling latest images…[/dim]")
+        with Live(
+            Spinner("dots", text="  Pulling latest images…"),
+            console=console,
+            refresh_per_second=12,
+            transient=True,
+        ):
+            pull_result = subprocess.run(
+                ["docker", "compose", "-f", str(compose_file), "pull"],
+                capture_output=True,
+                env=_compose_env(secret),
+            )
+        if pull_result.returncode != 0:
+            console.print("  [yellow]Registry unavailable — building locally…[/yellow]")
+            with Live(
+                Spinner("dots", text="  Building images…"),
+                console=console,
+                refresh_per_second=12,
+                transient=True,
+            ):
+                subprocess.run(
+                    ["docker", "compose", "-f", str(compose_file), "build"],
+                    capture_output=True,
+                    env=_compose_env(secret),
+                )
+        else:
+            console.print("  [green]✓[/green] Images up to date")
+
+    with Live(
+        Spinner("dots", text="  Starting services…"),
+        console=console,
+        refresh_per_second=12,
+        transient=True,
+    ):
         result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "pull"],
+            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
             capture_output=True,
+            text=True,
             env=_compose_env(secret),
         )
-        if result.returncode != 0:
-            console.print("[dim]Images not on registry yet — building locally…[/dim]")
-            _compose(compose_file, "build", secret=secret)
-    console.print("[dim]Starting services…[/dim]")
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
-        capture_output=True,
-        text=True,
-        env=_compose_env(secret),
-    )
+
     if result.returncode != 0:
         if "not found" in result.stderr or "denied" in result.stderr:
             raise click.ClickException(
@@ -318,7 +345,9 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
       AGENTFILE_API_URL=http://localhost:8000
       MCP_GATEWAY_URL=http://localhost:8080
     """
-    console.rule("[bold]ninetrix dev[/bold]")
+    console.print()
+    console.rule("[bold cyan]  Ninetrix Dev  [/bold cyan]")
+    console.print()
 
     _check_docker()
     compose_file = _get_compose_file()
@@ -336,16 +365,15 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
     from rich.console import Group
     from rich.spinner import Spinner
 
-    with Live(console=console, refresh_per_second=4) as live:
+    spin = Spinner("dots", text="  Waiting for services…")
+    init_status = {s["name"]: False for s in _STACK}
+    with Live(Group(spin, _status_table(init_status)), console=console, refresh_per_second=8) as live:
         for _ in range(60):
             status = _poll_health(compose_file, timeout=2)
             if all(status.values()):
                 live.update(_status_table(status, final=True))
                 break
-            live.update(Group(
-                Spinner("dots", text=" Waiting for services…", style="dim"),
-                _status_table(status, final=False),
-            ))
+            live.update(Group(spin, _status_table(status, final=False)))
         else:
             live.update(_status_table(status, final=True))
 
