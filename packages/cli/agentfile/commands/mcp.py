@@ -214,8 +214,8 @@ def mcp_list(agentfile_path: str) -> None:
         )
     else:
         console.print(
-            f"  [yellow]⚠[/yellow]  Gateway not reachable — "
-            f"run [bold]ninetrix dev[/bold] first\n"
+            "  [yellow]⚠[/yellow]  Gateway not reachable — "
+            "run [bold]ninetrix dev[/bold] first\n"
         )
 
     # ── Agentfile side ────────────────────────────────────────────────────────
@@ -330,8 +330,8 @@ def mcp_add(
     entry = mcp_catalog.get(name)
     if entry is None:
         console.print(f"  [red]'{name}' is not in the built-in catalog.[/red]")
-        console.print(f"  Run [bold]ninetrix mcp catalog[/bold] to see available servers.")
-        console.print(f"  Use [bold]--custom[/bold] to add a non-catalog server.\n")
+        console.print("  Run [bold]ninetrix mcp catalog[/bold] to see available servers.")
+        console.print("  Use [bold]--custom[/bold] to add a non-catalog server.\n")
         raise SystemExit(1)
 
     console.print(f"  [bold]{name}[/bold] — {entry.description}")
@@ -442,7 +442,7 @@ def mcp_remove(name: str, yes: bool, no_restart: bool) -> None:
 
     if not worker_config.has_server(name):
         console.print(f"  [yellow]'{name}' is not in the worker config.[/yellow]")
-        console.print(f"  Run [bold]ninetrix mcp status[/bold] to see what's configured.\n")
+        console.print("  Run [bold]ninetrix mcp status[/bold] to see what's configured.\n")
         raise SystemExit(0)
 
     # Warn if server is declared in agentfile.yaml
@@ -601,7 +601,7 @@ def mcp_test(
         )
         ms = int((time.perf_counter() - t0) * 1000)
     except httpx.ConnectError:
-        console.print(f"  [red]✗[/red] Connection lost during tool call.\n")
+        console.print("  [red]✗[/red] Connection lost during tool call.\n")
         raise SystemExit(1)
 
     if not resp.is_success:

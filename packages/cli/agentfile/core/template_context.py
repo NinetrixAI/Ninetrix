@@ -36,7 +36,7 @@ def build_context(
     try:
         from agentfile.core.mcp_registry import resolve
     except ImportError:
-        from core.mcp_registry import resolve  # type: ignore[import]
+        pass
 
     eff_governance  = af.effective_governance(agent_def)
     eff_persistence = af.effective_persistence(agent_def)

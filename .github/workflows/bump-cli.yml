@@ -56,9 +56,14 @@ jobs:
 
       - name: Commit & tag
         run: |
+          TAG="cli/v${{ steps.version.outputs.new }}"
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            echo "::error::Tag $TAG already exists on remote. Delete it first or choose a different bump type."
+            exit 1
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add packages/cli/pyproject.toml
           git commit -m "chore(cli): bump version to ${{ steps.version.outputs.new }}"
-          git tag "cli/v${{ steps.version.outputs.new }}"
-          git push origin HEAD --tags
+          git tag "$TAG"
+          git push origin HEAD "$TAG"
