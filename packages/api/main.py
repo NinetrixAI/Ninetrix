@@ -1,10 +1,19 @@
 """Agentfile API server — serves the local web dashboard."""
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+
+
+class _NoHealthFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /health" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_NoHealthFilter())
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
