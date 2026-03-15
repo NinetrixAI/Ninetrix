@@ -1,0 +1,107 @@
+{% if use_mcp_gateway %}
+# ── MCP Gateway client (runtime tool discovery over HTTP JSON-RPC) ─────────────
+_MCP_GATEWAY_URL       = os.environ.get("MCP_GATEWAY_URL",       {{ mcp_gateway_url | tojson }}).rstrip("/")
+_MCP_GATEWAY_TOKEN     = os.environ.get("MCP_GATEWAY_TOKEN",     {{ mcp_gateway_token | tojson }})
+_MCP_GATEWAY_WORKSPACE = os.environ.get("MCP_GATEWAY_WORKSPACE", {{ mcp_gateway_workspace | tojson }})
+
+_GW_HEADERS: dict = ({"Authorization": f"Bearer {_MCP_GATEWAY_TOKEN}"} if _MCP_GATEWAY_TOKEN else {})
+_GW_ENDPOINT = f"{_MCP_GATEWAY_URL}/v1/mcp/{_MCP_GATEWAY_WORKSPACE}"
+
+
+class _MCPGatewaySession:
+    """
+    Drop-in replacement for mcp.ClientSession — proxies tool calls to the gateway.
+    Implements the same .call_tool(name, args) interface used in _run_turn().
+    """
+    def __init__(self, http: httpx.AsyncClient):
+        self._http = http
+
+    async def call_tool(self, name: str, args: dict):
+        payload = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": args},
+        }
+        resp = await self._http.post(_GW_ENDPOINT, json=payload, headers=_GW_HEADERS)
+        resp.raise_for_status()
+        body = resp.json()
+        if "error" in body:
+            err = body["error"]
+            if err.get("code") == -32010:
+                data = err.get("data", {})
+                integration_id = data.get("integration_id", "")
+                auth_url = data.get("auth_url", "")
+                print(f"\n\u26a0  Tool '{name}' requires authorization.", file=sys.stderr, flush=True)
+                print(f"   Integration '{integration_id}' is not connected.", file=sys.stderr, flush=True)
+                if auth_url:
+                    print(f"\n   Connect now:\n   {auth_url}\n", file=sys.stderr, flush=True)
+                    print(f"   Re-run after connecting in the dashboard.\n", file=sys.stderr, flush=True)
+                raise SystemExit(1)
+            raise RuntimeError(err.get("message", "MCP Gateway error"))
+        result = body.get("result", {})
+        # Wrap as object with .content so _extract_text() works unchanged
+        content = result.get("content") or [{"type": "text", "text": str(result)}]
+        return type("_GWResult", (), {"content": content, "isError": result.get("isError", False)})()
+
+
+async def _init_mcp_gateway(http: httpx.AsyncClient) -> tuple[dict, list]:
+    """
+    Connect to the MCP Gateway, discover available tools, and return
+    (sessions_by_tool, tool_definitions) ready for the LLM API.
+    """
+    if not _MCP_GATEWAY_URL:
+        print(
+            "[mcp-gateway] No gateway URL configured. "
+            "Set MCP_GATEWAY_URL env var or add 'mcp_gateway.url' to agentfile.yaml.",
+            file=sys.stderr, flush=True,
+        )
+        return {}, []
+
+    session = _MCPGatewaySession(http)
+    try:
+        # Initialize handshake
+        await asyncio.wait_for(
+            http.post(_GW_ENDPOINT, json={"jsonrpc":"2.0","id":0,"method":"initialize","params":{}},
+                      headers=_GW_HEADERS),
+            timeout=MCP_INIT_TIMEOUT,
+        )
+        # Discover tools
+        list_resp = await asyncio.wait_for(
+            http.post(_GW_ENDPOINT, json={"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}},
+                      headers=_GW_HEADERS),
+            timeout=MCP_INIT_TIMEOUT,
+        )
+        list_resp.raise_for_status()
+        body = list_resp.json()
+        if "error" in body:
+            print(f"[mcp-gateway] Error from gateway: {body['error']}", file=sys.stderr)
+            return {}, []
+
+        tools = body.get("result", {}).get("tools", [])
+        sessions_by_tool = {t["name"]: session for t in tools}
+        tool_definitions = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+                },
+            }
+            for t in tools
+        ]
+        names = [t["name"] for t in tools]
+        print(f"[mcp-gateway] Connected to {_MCP_GATEWAY_URL} — {len(tools)} tool(s): {', '.join(names)}",
+              flush=True)
+        return sessions_by_tool, tool_definitions
+
+    except asyncio.TimeoutError:
+        print(f"[mcp-gateway] ERROR: timed out connecting to gateway at {_MCP_GATEWAY_URL}",
+              file=sys.stderr, flush=True)
+        return {}, []
+    except Exception as exc:
+        print(f"[mcp-gateway] ERROR: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return {}, []
+
+
+{% endif %}

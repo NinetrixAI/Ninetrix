@@ -114,7 +114,7 @@ def _ensure_mcp_worker_config() -> None:
     # Write a minimal fallback inline
     dest.write_text(
         "gateway_url: ws://localhost:8080\n"
-        "workspace_id: local\n"
+        "workspace_id: default\n"
         "worker_name: default\n"
         "servers: []\n"
     )
@@ -155,9 +155,10 @@ def _check_docker() -> None:
 
 
 def _compose_env(secret: str) -> dict:
-    """Build env for all docker compose subprocesses — injects the host secret."""
+    """Build env for docker compose — injects host secret + MCP credentials."""
     import os
-    env = os.environ.copy()
+    from agentfile.commands.gateway import _build_proc_env
+    env = _build_proc_env()
     env["AGENTFILE_RUNNER_TOKENS"] = secret
     return env
 

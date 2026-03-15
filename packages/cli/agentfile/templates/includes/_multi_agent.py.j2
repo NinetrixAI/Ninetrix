@@ -1,0 +1,63 @@
+{% if has_collaborators %}
+# ── Agent-to-agent transfer ───────────────────────────────────────────────────
+
+async def _transfer_to_agent(
+    agent: str, message: str, context: dict, thread_id: str,
+    caller_trace_id: str = "",
+) -> str:
+    """Delegate a task to a collaborator agent via its /invoke endpoint."""
+    url = PEER_URLS.get(agent.lower())
+    if not url:
+        return f"Error: agent '{agent}' not in PEER_URLS. Known peers: {list(PEER_URLS)}"
+    payload = {
+        "thread_id": thread_id,
+        "run_id": uuid.uuid4().hex,
+        "caller_agent": AGENT_NAME,
+        "message": message,
+        "context": context,
+        "parent_trace_id": caller_trace_id{% if has_persistence %} or TRACE_ID{% endif %},
+    }
+    print(f"[transfer→] {AGENT_NAME} → {agent}: {message[:120]}", flush=True)
+    try:
+        async with aiohttp.ClientSession() as _s:
+            async with _s.post(
+                f"{url}/invoke",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=TRANSFER_TIMEOUT),
+            ) as _r:
+                data = await _r.json()
+        if data.get("status") == "completed":
+            result = str(data.get("result", ""))
+        else:
+            result = f"Error from '{agent}': {data.get('error', 'unknown error')}"
+    except Exception as exc:
+        result = f"Error calling '{agent}': {type(exc).__name__}: {exc}"
+    print(f"[transfer←] {agent} → {AGENT_NAME}: {result[:120]}", flush=True)
+    return result
+
+
+{% if collaborators | length >= 2 %}
+async def _transfer_parallel(transfers: list, thread_id: str) -> str:
+    """Delegate tasks to multiple agents simultaneously and merge results."""
+    _agents_str = ", ".join(t.get("agent", "?") for t in transfers)
+    print(f"[transfer→] {AGENT_NAME} → [{_agents_str}] (parallel, {len(transfers)} tasks)", flush=True)
+    results = await asyncio.gather(*[
+        _transfer_to_agent(
+            t.get("agent", ""), t.get("message", ""), t.get("context", {}), thread_id
+        )
+        for t in transfers
+    ], return_exceptions=True)
+    parts = []
+    for t, r in zip(transfers, results):
+        name = t.get("agent", "?")
+        if isinstance(r, Exception):
+            parts.append(f"[{name}]: Error: {r}")
+        else:
+            parts.append(f"[{name}]: {r}")
+    merged = "\n\n".join(parts)
+    print(f"[transfer←] [{_agents_str}] → {AGENT_NAME}: collected {len(transfers)} result(s)", flush=True)
+    return merged
+
+
+{% endif %}
+{% endif %}

@@ -3,10 +3,10 @@
 # All fields can also be overridden with environment variables.
 
 # Gateway connection
-gateway_url: "ws://localhost:8080"   # env: MCP_GATEWAY_URL
+gateway_url: "ws://mcp-gateway:8080"  # env: MCP_GATEWAY_URL (use ws://localhost:8080 for standalone)
 workspace_id: "default"              # env: MCP_WORKSPACE_ID
-worker_name: "my-worker"             # env: MCP_WORKER_NAME
-worker_id: "my-worker"               # env: MCP_WORKER_ID  (defaults to worker_name)
+worker_name: "default"               # env: MCP_WORKER_NAME
+worker_id: "default"                 # env: MCP_WORKER_ID  (defaults to worker_name)
 token: "dev-secret"                  # env: MCP_GATEWAY_TOKEN
 
 # MCP servers this worker will run

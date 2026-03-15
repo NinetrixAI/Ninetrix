@@ -1,0 +1,92 @@
+# ── Runner phone-home helper ──────────────────────────────────────────────────
+
+def _post_runner_event(event_type: str, data: dict) -> None:
+    """Fire a runner lifecycle event to saas-api. Non-fatal if unreachable."""
+    if not _RUNNER_TOKEN or not _API_URL:
+        return
+    url = f"{_API_URL}/v1/runners/events"
+    try:
+        import httpx as _httpx
+        _resp = _httpx.post(
+            url,
+            json={"events": [{"type": event_type, "data": data}]},
+            headers={"Authorization": f"Bearer {_RUNNER_TOKEN}"},
+            timeout=5,
+        )
+        print(f"[runner] event={event_type} → {_resp.status_code}", file=sys.stderr)
+    except Exception as _exc:
+        print(f"[runner] event={event_type} failed ({url}): {_exc}", file=sys.stderr)
+
+
+# ── SaaS transparent persistence ──────────────────────────────────────────────
+# When AGENTFILE_RUNNER_TOKEN + AGENTFILE_API_URL are set the agent is running
+# as a SaaS deployment. We automatically post checkpoint snapshots so the full
+# conversation history appears in the dashboard — no persistence: block needed
+# in agentfile.yaml for this to work.
+
+_SAAS_PERSIST: bool = bool(_RUNNER_TOKEN and _API_URL)
+
+
+class _SaaSCheckpointer:
+    """Posts checkpoint snapshots to the runner events API at each turn boundary."""
+
+    __slots__ = ("thread_id", "trace_id", "parent_trace_id", "step_index",
+                 "tokens_used", "history_meta")
+
+    def __init__(self, thread_id: str, trace_id: str,
+                 parent_trace_id: str | None = None) -> None:
+        self.thread_id       = thread_id
+        self.trace_id        = trace_id
+        self.parent_trace_id = parent_trace_id
+        self.step_index      = 0
+        self.tokens_used     = 0
+        self.history_meta: list = []
+
+    def record(self, role: str, in_tok: int = 0, out_tok: int = 0,
+               duration_ms: int | None = None) -> None:
+        """Stamp the current message with a precise timestamp at the moment it's added.
+        Call this immediately after appending each message to history so that
+        duration_ms (time between consecutive messages) is accurate."""
+        if not _SAAS_PERSIST:
+            return
+        import datetime as _dt_mod
+        _ts = _dt_mod.datetime.now(_dt_mod.timezone.utc).isoformat()
+        if role == "assistant":
+            self.history_meta.append({"ts": _ts, "tokens_in": in_tok, "tokens_out": out_tok})
+        elif duration_ms is not None:
+            self.history_meta.append({"ts": _ts, "duration_ms": duration_ms})
+        else:
+            self.history_meta.append({"ts": _ts})
+
+    def step(self, messages: list, status: str,
+             in_tok: int = 0, out_tok: int = 0) -> None:
+        if not _SAAS_PERSIST:
+            return
+        import datetime as _dt_mod
+        _ts_now = _dt_mod.datetime.now(_dt_mod.timezone.utc).isoformat()
+        history = [m for m in messages if m.get("role") != "system"]
+        # Fallback: stamp any messages not yet recorded by record() with current time.
+        # Under normal operation record() is called for every message, so this loop
+        # should be a no-op. It only fires if a code path was missed.
+        while len(self.history_meta) < len(history):
+            idx  = len(self.history_meta)
+            role = history[idx].get("role", "")
+            if role == "assistant":
+                self.history_meta.append({"ts": _ts_now, "tokens_in": in_tok, "tokens_out": out_tok})
+            else:
+                self.history_meta.append({"ts": _ts_now})
+        _post_runner_event("checkpoint", {
+            "thread_id":       self.thread_id,
+            "trace_id":        self.trace_id,
+            "parent_trace_id": self.parent_trace_id,
+            "agent_id":        AGENT_ID,
+            "step_index":      self.step_index,
+            "status":          status,
+            "history":         history,
+            "history_meta":    self.history_meta,
+            "tokens_used":     self.tokens_used,
+            "input_tokens":    in_tok,
+            "output_tokens":   out_tok,
+            "model":           LITELLM_MODEL,
+        })
+        self.step_index += 1

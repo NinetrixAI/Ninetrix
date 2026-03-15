@@ -10,12 +10,14 @@ Each folder contains a self-contained `agentfile.yaml` you can build and run imm
 | [04-research-crew](./04-research-crew/) | Three-agent crew: researcher, writer, reviewer |
 | [05-scheduled-agent](./05-scheduled-agent/) | Agent triggered on a cron schedule |
 | [06-self-hosted](./06-self-hosted/) | Full self-hosted stack with docker-compose |
+| [07-local-tools](./07-local-tools/) | Custom tools for the data assistant agent |
 
 ## Quick start
 
 ```bash
-pip install ninetrix
-
+pipx install ninetrix
+or 
+curl -fsSL https://install.ninetrix.io | sh
 # Start the local stack
 ninetrix dev
 

@@ -1,0 +1,221 @@
+{% if has_persistence %}
+# ── Persistence layer ─────────────────────────────────────────────────────────
+
+def _to_jsonable(obj):
+    """Recursively convert API response objects to JSON-serializable form."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(i) for i in obj]
+    if hasattr(obj, "model_dump"):
+        return _to_jsonable(obj.model_dump())
+    if hasattr(obj, "__dict__"):
+        return _to_jsonable({k: v for k, v in obj.__dict__.items() if not k.startswith("_")})
+    return str(obj)
+
+
+def _resolve_url(template: str) -> str:
+    return re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), ""), template)
+
+
+class StateStore:
+    def __init__(self, url: str):
+        self._url = url
+        self._conn = None
+
+    async def connect(self) -> None:
+        import psycopg
+        self._conn = await psycopg.AsyncConnection.connect(self._url, autocommit=True)
+        await self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS agentfile_checkpoints (
+                id BIGSERIAL PRIMARY KEY,
+                trace_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                step_index INTEGER NOT NULL,
+                timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                status TEXT NOT NULL,
+                checkpoint JSONB NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                parent_trace_id TEXT
+            )
+        """)
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_af_thread_id "
+            "ON agentfile_checkpoints(thread_id)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_af_trace_id "
+            "ON agentfile_checkpoints(trace_id)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_af_status "
+            "ON agentfile_checkpoints(status)"
+        )
+        # Migrate: add parent_trace_id column if it was created before multi-agent support
+        await self._conn.execute(
+            "ALTER TABLE agentfile_checkpoints "
+            "ADD COLUMN IF NOT EXISTS parent_trace_id TEXT"
+        )
+
+    async def save(self, row: dict) -> None:
+        await self._conn.execute(
+            """
+            INSERT INTO agentfile_checkpoints
+                (trace_id, thread_id, agent_id, step_index, status, checkpoint, metadata, parent_trace_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                row["trace_id"], row["thread_id"], row["agent_id"],
+                row["step_index"], row["status"],
+                json.dumps(row["checkpoint"]),
+                json.dumps(row["metadata"]),
+                row.get("parent_trace_id"),
+            ),
+        )
+
+    async def load_latest(self, thread_id: str, agent_id: str = "") -> dict | None:
+        cur = await self._conn.execute(
+            """
+            SELECT trace_id, thread_id, agent_id, step_index, status, checkpoint, metadata
+            FROM agentfile_checkpoints
+            WHERE thread_id = %s AND agent_id = %s
+            ORDER BY step_index DESC LIMIT 1
+            """,
+            (thread_id, agent_id or AGENT_ID),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "trace_id": row[0],
+            "thread_id": row[1],
+            "agent_id": row[2],
+            "step_index": row[3],
+            "status": row[4],
+            "checkpoint": row[5] if isinstance(row[5], dict) else json.loads(row[5]),
+            "metadata": row[6] if isinstance(row[6], dict) else json.loads(row[6]),
+        }
+
+    async def poll_status(self, trace_id: str, step_index: int) -> str:
+        cur = await self._conn.execute(
+            "SELECT status FROM agentfile_checkpoints "
+            "WHERE trace_id = %s AND step_index = %s",
+            (trace_id, step_index),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else ""
+
+    async def close(self) -> None:
+        if self._conn:
+            await self._conn.close()
+
+
+class Checkpointer:
+    def __init__(self, store: StateStore,
+                 thread_id: str = "", trace_id: str = "",
+                 parent_trace_id: str | None = None):
+        self.store = store
+        self.thread_id = thread_id or THREAD_ID
+        self.trace_id = trace_id or TRACE_ID
+        self.parent_trace_id = parent_trace_id
+        self.step_index = 0
+        self.history: list = []
+        self.history_meta: list = []  # parallel to history — per-message timing & token data
+        self.turn_start_history_len: int = 0  # set before each turn for resume rollback
+        self.variables: dict = {
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+        }
+
+    async def save(self, status: str, pending_tool_calls: list | None = None) -> None:
+        if pending_tool_calls is None:
+            pending_tool_calls = []
+        row = {
+            "trace_id": self.trace_id,
+            "thread_id": self.thread_id,
+            "agent_id": AGENT_ID,
+            "step_index": self.step_index,
+            "status": status,
+            "checkpoint": {
+                "thread_id": self.thread_id,
+                "status": status,
+                "history": _to_jsonable(self.history),
+                "history_meta": self.history_meta,
+                "pending_tool_calls": pending_tool_calls,
+                "variables": self.variables,
+                "turn_start_history_len": self.turn_start_history_len,
+            },
+            "metadata": {
+                "model": MODEL,
+                "tokens_used": (
+                    self.variables["total_input_tokens"]
+                    + self.variables["total_output_tokens"]
+                ),
+                "input_tokens": self.variables.get("total_input_tokens", 0),
+                "output_tokens": self.variables.get("total_output_tokens", 0),
+            },
+            "parent_trace_id": self.parent_trace_id,
+        }
+        try:
+            await self.store.save(row)
+        except Exception as exc:
+            print(f"[persistence] Warning: failed to save checkpoint: {exc}", file=sys.stderr)
+        self.step_index += 1
+
+    async def load_thread(self) -> dict | None:
+        return await self.store.load_latest(self.thread_id)
+
+    async def wait_for_approval(self, tool_name: str, tool_args: dict) -> bool:
+        """Save waiting_for_approval checkpoint, notify webhook, then poll until resolved."""
+        await self.save("waiting_for_approval", [{"function": tool_name, "args": tool_args}])
+        current_step = self.step_index - 1
+
+        _console.print(f"\n[bold yellow]⏸ Approval required:[/bold yellow] [bold cyan]{tool_name}[/bold cyan]")
+        _console.print(f"  [dim]trace_id={TRACE_ID}  step={current_step}[/dim]")
+
+        # ── Notify webhook ────────────────────────────────────────────────────
+        if APPROVAL_NOTIFY_URL:
+            import urllib.request as _urllib_req
+            try:
+                _payload = json.dumps({
+                    "agent":      AGENT_ID,
+                    "thread_id":  THREAD_ID,
+                    "trace_id":   TRACE_ID,
+                    "step_index": current_step,
+                    "tool":       tool_name,
+                    "args":       tool_args,
+                }).encode()
+                _req = _urllib_req.Request(
+                    APPROVAL_NOTIFY_URL,
+                    data=_payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with _urllib_req.urlopen(_req, timeout=10):
+                    pass
+                _console.print(f"  [dim]Notification sent → {APPROVAL_NOTIFY_URL}[/dim]")
+            except Exception as _notify_exc:
+                print(f"[approval] Warning: notification failed: {_notify_exc}", file=sys.stderr)
+
+        _console.print("  [dim]Waiting for decision (approve/reject via DB or API)…[/dim]\n")
+
+        # ── Poll DB ───────────────────────────────────────────────────────────
+        elapsed = 0
+        while elapsed < APPROVAL_TIMEOUT:
+            await asyncio.sleep(APPROVAL_POLL_INTERVAL)
+            elapsed += APPROVAL_POLL_INTERVAL
+            status = await self.store.poll_status(TRACE_ID, current_step)
+            if status == "approved":
+                _console.print("[bold green]✓ Approved.[/bold green] Continuing…\n")
+                return True
+            if status == "rejected":
+                _console.print("[bold red]✗ Rejected.[/bold red] Skipping tool call.\n")
+                return False
+        _console.print(f"[bold red]⏱ Approval timed out[/bold red] after {APPROVAL_TIMEOUT}s. Skipping.\n")
+        return False
+
+
+{% endif %}

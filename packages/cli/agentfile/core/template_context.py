@@ -12,7 +12,69 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+try:
+    from pydantic import BaseModel, ConfigDict
+    _PYDANTIC_AVAILABLE = True
+except ImportError:
+    _PYDANTIC_AVAILABLE = False
+
+if _PYDANTIC_AVAILABLE:
+    class TemplateContext(BaseModel):
+        model_config = ConfigDict(arbitrary_types_allowed=True)
+
+        agent: Any
+        needs_node: bool = False
+        needs_uv: bool = False
+        has_mcp_tools: bool = False
+        mcp_tool_defs: list = []
+        has_composio_tools: bool = False
+        composio_tool_defs: list = []
+        has_persistence: bool = False
+        persistence_provider: str = ""
+        persistence_url_template: str = ""
+        approval_notify_url: str = ""
+        has_planned_execution: bool = False
+        verify_steps: bool = False
+        max_plan_steps: int = 10
+        on_step_failure: str = "continue"
+        has_verifier: bool = False
+        verifier_provider: str = ""
+        verifier_model: str = ""
+        verifier_max_tokens: int = 128
+        has_thinking_step: bool = False
+        thinking_provider: str = ""
+        thinking_model: str = ""
+        thinking_max_tokens: int = 2048
+        thinking_temperature: float = 0.5
+        thinking_min_input_length: int = 50
+        thinking_prompt: str = ""
+        has_webhook_triggers: bool = False
+        has_schedule_triggers: bool = False
+        has_any_triggers: bool = False
+        webhook_trigger_defs: list = []
+        schedule_trigger_defs: list = []
+        webhook_port: int = 8000
+        is_multi_agent: bool = False
+        agent_name: str = ""
+        collaborators: list = []
+        has_collaborators: bool = False
+        invoke_port: int = 9000
+        transfer_timeout: int = 300
+        base_image: str = "python:3.12-slim"
+        has_s3_volumes: bool = False
+        volume_defs: list = []
+        is_saas_runner: bool = False
+        has_invoke_server: bool = False
+        use_mcp_gateway: bool = False
+        mcp_gateway_url: str = ""
+        mcp_gateway_token: str = ""
+        mcp_gateway_workspace: str = "default"
+        has_local_tools: bool = False
+        local_tool_files: list = []
+        local_tool_manifests: list = []
+        local_source_paths: list = []
 
 
 def build_context(
@@ -140,7 +202,7 @@ def build_context(
                 if _warn:
                     _warn(f"Local tool discovery failed: {_exc}")
 
-    return {
+    result = {
         "agent":                      agent,
         "needs_node":                 needs_node,
         "needs_uv":                   needs_uv,
@@ -193,3 +255,6 @@ def build_context(
         "local_tool_manifests":       local_tool_manifests,
         "local_source_paths":         local_source_paths,
     }
+    if _PYDANTIC_AVAILABLE:
+        return TemplateContext(**result)
+    return result

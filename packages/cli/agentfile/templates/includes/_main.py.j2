@@ -1,0 +1,528 @@
+# ── Main (async) ──────────────────────────────────────────────────────────────
+
+async def main() -> None:
+    print(f"Agent '{{ agent.name }}' running ({PROVIDER}/{MODEL})")
+
+{% if has_persistence %}
+    _store = StateStore(_resolve_url(PERSISTENCE_URL_TEMPLATE))
+    _cp = None
+    _replay_input: str | None = None
+    try:
+        await _store.connect()
+        print(f"[persistence] Connected to {PERSISTENCE_PROVIDER}. Thread: {THREAD_ID}")
+        _cp = Checkpointer(_store)
+
+        _prior = await _cp.load_thread()
+        if _prior:
+            snap = _prior["checkpoint"]
+            _cp.history = snap.get("history", [])
+            _raw_meta = snap.get("history_meta") or []
+            _cp.history_meta = _raw_meta + [{}] * max(0, len(_cp.history) - len(_raw_meta))
+            _cp.variables = snap.get("variables", _cp.variables)
+            _cp.step_index = _prior["step_index"] + 1
+            print(f"[resume] Restored thread '{THREAD_ID}' at step {_cp.step_index}")
+
+            if snap.get("status") == "waiting_for_approval":
+                pending = snap.get("pending_tool_calls", [])
+                if pending:
+                    _pending_tool = pending[0]["function"]
+                    # Roll history back to the start of the interrupted turn
+                    _turn_start_len = snap.get(
+                        "turn_start_history_len",
+                        max(0, len(_cp.history) - 2),
+                    )
+                    # Capture the user message that triggered the turn (for auto-replay)
+                    _trigger_msg = (
+                        _cp.history[_turn_start_len]
+                        if len(_cp.history) > _turn_start_len
+                        else None
+                    )
+                    _cp.history      = _cp.history[:_turn_start_len]
+                    _cp.history_meta = _cp.history_meta[:_turn_start_len]
+
+                    _console.print(
+                        f"\n[bold yellow]⏸ Thread was waiting for approval of:[/bold yellow]"
+                        f" [bold cyan]{_pending_tool}[/bold cyan]"
+                    )
+                    _console.print(
+                        f"  [dim]trace_id={_prior['trace_id']}  "
+                        f"step={_prior['step_index']}[/dim]"
+                    )
+                    _console.print("  [dim]Re-polling for decision…[/dim]\n")
+
+                    _resume_elapsed = 0
+                    _resume_decision: str | None = None
+                    while _resume_elapsed < APPROVAL_TIMEOUT:
+                        await asyncio.sleep(APPROVAL_POLL_INTERVAL)
+                        _resume_elapsed += APPROVAL_POLL_INTERVAL
+                        _rs = await _store.poll_status(
+                            _prior["trace_id"], _prior["step_index"]
+                        )
+                        if _rs == "approved":
+                            _resume_decision = "approved"
+                            break
+                        if _rs == "rejected":
+                            _resume_decision = "rejected"
+                            break
+
+                    if _resume_decision == "approved":
+                        _console.print("[bold green]✓ Approved.[/bold green]")
+                        # Auto-replay the original user message if we can recover it
+                        if (
+                            _trigger_msg
+                            and _trigger_msg.get("role") == "user"
+                            and isinstance(_trigger_msg.get("content"), str)
+                        ):
+                            _replay_input = _trigger_msg["content"]
+                            _console.print(
+                                f"  [dim]Auto-replaying:[/dim] {_replay_input[:80]}\n"
+                            )
+                        else:
+                            _console.print(
+                                "  Re-send your request to continue.\n"
+                            )
+                    elif _resume_decision == "rejected":
+                        _console.print(
+                            "[bold red]✗ Rejected.[/bold red]"
+                            " Re-send your request to continue.\n"
+                        )
+                    else:
+                        _console.print(
+                            f"[bold red]⏱ Timed out[/bold red] waiting for approval."
+                            " Re-send your request to continue.\n"
+                        )
+
+        # Register this thread with saas-api (idempotent — ON CONFLICT DO NOTHING)
+        _post_runner_event("thread_started", {
+            "thread_id": THREAD_ID,
+            "trace_id":  TRACE_ID,
+            "agent_id":  AGENT_ID,
+            "trigger":   "api",
+            "model":     LITELLM_MODEL,
+        })
+    except Exception as exc:
+        print(f"[persistence] Warning: could not connect to state store: {exc}", file=sys.stderr)
+        _cp = None
+{% endif %}
+
+    try:
+        async with AsyncExitStack() as stack:
+{% if use_mcp_gateway %}
+            _gw_http = await stack.enter_async_context(
+                httpx.AsyncClient(timeout=httpx.Timeout(TOOL_TIMEOUT + 5))
+            )
+            sessions_by_tool, mcp_tool_defs = await _init_mcp_gateway(_gw_http)
+            if not sessions_by_tool:
+                print("[warning] MCP Gateway returned no tools — check worker connection.", file=sys.stderr)
+{% else %}
+            sessions_by_tool: dict = {}
+            mcp_tool_defs: list = []
+{% endif %}
+
+{% if has_composio_tools %}
+            _composio_toolset, _composio_schemas, _composio_tool_names = _start_composio_tools()
+{% else %}
+            _composio_toolset = None
+            _composio_schemas: list = []
+            _composio_tool_names: set = set()
+{% endif %}
+
+            all_tool_defs = mcp_tool_defs + _composio_schemas
+{% if has_local_tools %}
+            # Add local @Tool schemas so the LLM knows about them
+            all_tool_defs += [
+                {"type": "function", "function": {"name": _td.name, "description": _td.description, "parameters": _td.parameters}}
+                for _td in _local_tool_registry.all()
+            ]
+{% endif %}
+{% if has_collaborators %}
+            # Inject transfer tools so the agent can delegate to collaborators
+            all_tool_defs += [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "transfer_to_agent",
+                        "description": "Delegate a task to a collaborator agent and return its result.",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["agent", "message"],
+                            "properties": {
+                                "agent": {
+                                    "type": "string",
+                                    "enum": {{ collaborators | tojson }},
+                                    "description": "Name of the collaborator agent to delegate to",
+                                },
+                                "message": {
+                                    "type": "string",
+                                    "description": "Task or question for the collaborator agent",
+                                },
+                                "context": {
+                                    "type": "object",
+                                    "description": "Optional context or data to pass to the agent",
+                                },
+                            },
+                        },
+                    },
+                },
+{% if collaborators | length >= 2 %}
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "transfer_to_agents_parallel",
+                        "description": "Delegate tasks to multiple agents simultaneously and collect results.",
+                        "parameters": {
+                            "type": "object",
+                            "required": ["transfers"],
+                            "properties": {
+                                "transfers": {
+                                    "type": "array",
+                                    "description": "List of agent+message pairs to invoke in parallel",
+                                    "items": {
+                                        "type": "object",
+                                        "required": ["agent", "message"],
+                                        "properties": {
+                                            "agent":   {"type": "string"},
+                                            "message": {"type": "string"},
+                                            "context": {"type": "object"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+{% endif %}
+            ]
+{% endif %}
+
+{% if is_multi_agent %}
+            # Publish state for the /invoke FastAPI handler
+            _invoke_state["sessions_by_tool"] = sessions_by_tool
+            _invoke_state["all_tool_defs"] = all_tool_defs
+{% if has_persistence %}
+            _invoke_state["store"] = _store
+{% endif %}
+{% if has_composio_tools %}
+            _invoke_state["composio_toolset"] = _composio_toolset
+            _invoke_state["composio_tool_names"] = _composio_tool_names
+{% endif %}
+            _invoke_state["semaphore"] = asyncio.Semaphore(AGENTFILE_CONCURRENCY)
+{% endif %}
+{% if has_webhook_triggers or is_multi_agent or is_saas_runner %}
+            # Publish state for the /chat endpoint
+            _chat_state["sessions_by_tool"] = sessions_by_tool
+            _chat_state["all_tool_defs"]    = all_tool_defs
+{% if has_persistence %}
+            _chat_state["store"] = _store
+{% endif %}
+{% if has_composio_tools %}
+            _chat_state["composio_toolset"]    = _composio_toolset
+            _chat_state["composio_tool_names"] = _composio_tool_names
+{% endif %}
+            _chat_state["ready"] = True
+{% endif %}
+
+{% if has_webhook_triggers or is_multi_agent or is_saas_runner or has_invoke_server %}
+{% if is_multi_agent or has_invoke_server %}
+            _uvicorn_port = INVOKE_PORT
+{% elif is_saas_runner %}
+            _uvicorn_port = 8080   # gateway always routes to port 8080 on Fly machines
+{% else %}
+            _uvicorn_port = WEBHOOK_PORT
+{% endif %}
+            _uvicorn_config = uvicorn.Config(
+                _app, host="0.0.0.0", port=_uvicorn_port,
+                log_level="warning", access_log=False,
+            )
+            _uvicorn_server = uvicorn.Server(_uvicorn_config)
+            async def _serve_with_log():
+                try:
+                    await _uvicorn_server.serve()
+                except Exception as _e:
+                    print(f"[error] HTTP server failed: {_e}", file=sys.stderr)
+            asyncio.create_task(_serve_with_log())
+            # Yield to the event loop so uvicorn actually binds the port before
+            # we print the "ready" message — avoids race conditions in ninetrix up.
+            await asyncio.sleep(0.1)
+{% if has_webhook_triggers %}
+            print(f"Webhook server listening on port {_uvicorn_port}")
+{% endif %}
+{% if is_multi_agent %}
+            print(f"[invoke] Agent '{AGENT_NAME}' accepting invocations on :{_uvicorn_port}")
+{% endif %}
+{% if has_invoke_server and not is_multi_agent %}
+            print(f"[invoke] Agent '{{ agent.name }}' accepting /invoke requests on :{_uvicorn_port}")
+{% endif %}
+{% endif %}
+{% if has_schedule_triggers %}
+            _scheduler = AsyncIOScheduler()
+{% for trigger in schedule_trigger_defs %}
+            _scheduler.add_job(
+                _fire_schedule, CronTrigger.from_crontab({{ trigger.cron | tojson }}),
+                args=[{{ trigger.message | tojson }}],
+                id="schedule_{{ loop.index }}",
+            )
+            print("Schedule trigger registered: {{ trigger.cron }}")
+{% endfor %}
+            _scheduler.start()
+{% endif %}
+{% if has_any_triggers %}
+            print("Agent ready — waiting for triggers.\n")
+{% elif has_invoke_server %}
+            print("Agent ready — waiting for /invoke requests.\n")
+{% elif is_multi_agent or is_saas_runner %}
+            # Uvicorn handles all requests (/chat, /invoke) — keep alive until stopped.
+            await asyncio.Event().wait()
+{% else %}
+            print("Send a message (Ctrl+C to quit):\n")
+{% if has_persistence %}
+            # When local DB persistence + SaaS telemetry are both active, create a
+            # single session-scoped saas_cp (reused across turns, not recreated per turn).
+            _saas_cp: "_SaaSCheckpointer | None" = _SaaSCheckpointer(THREAD_ID, TRACE_ID) if _SAAS_PERSIST else None
+            if _SAAS_PERSIST:
+                _post_runner_event("thread_started", {
+                    "thread_id": THREAD_ID,
+                    "trace_id":  TRACE_ID,
+                    "agent_id":  "{{ agent.name }}",
+                    "trigger":   "api",
+                    "model":     LITELLM_MODEL,
+                })
+{% else %}
+            # Register this process as a run with saas-api (no-op in local dev)
+            _thr = os.urandom(8).hex()
+            _post_runner_event("thread_started", {
+                "thread_id": _thr,
+                "trace_id":  "run_" + _thr[:8],
+                "agent_id":  "{{ agent.name }}",
+                "trigger":   "api",
+                "model":     LITELLM_MODEL,
+            })
+{% if not has_any_triggers and not has_invoke_server %}
+            # Session-scoped checkpointer — shared across all turns so step_index
+            # increments monotonically and each turn's checkpoints get unique indices
+            # (avoids DB ON CONFLICT overwriting earlier turns' history).
+            _saas_cp: "_SaaSCheckpointer | None" = _SaaSCheckpointer(_thr, "run_" + _thr[:8]) if _SAAS_PERSIST else None
+            # Cumulative message history so the saas_cp always sees a growing list
+            # (required for correct history_meta diff in the timeline endpoint).
+            _stdin_messages: "list" = []
+{% endif %}
+{% endif %}
+{% endif %}
+
+{% if (not is_multi_agent and not is_saas_runner) or has_any_triggers or has_invoke_server %}
+            while True:
+{% if has_any_triggers or has_invoke_server %}
+                item = await _trigger_queue.get()
+                user_input = item.get("message", "").strip()
+                run_id = item.get("run_id", "")
+                if not user_input:
+                    continue
+                print(f"\n[trigger] run_id={run_id}")
+                print(f"[trigger] message: {user_input[:120]}")
+                _post_runner_event("thread_started", {
+                    "thread_id": run_id or os.urandom(8).hex(),
+                    "trace_id":  f"run_{(run_id or '')[:8]}",
+                    "agent_id":  "{{ agent.name }}",
+                    "trigger":   "webhook",
+                    "model":     LITELLM_MODEL,
+                })
+{% else %}
+{% if has_persistence %}
+                if _replay_input is not None:
+                    user_input = _replay_input
+                    _replay_input = None
+                else:
+                    try:
+                        user_input = input("> ").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        print("\nBye.")
+                        break
+{% else %}
+                try:
+                    user_input = input("> ").strip()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nBye.")
+                    break
+{% endif %}
+
+                if not user_input:
+                    continue
+{% endif %}
+
+{% if has_thinking_step %}
+                # ── Thinking phase ────────────────────────────────────────────
+                # Skip for short/trivial inputs (e.g. "yes", "continue", "thanks")
+                _thinking_text: str | None = None
+                _thnk_in = _thnk_out = 0
+                if _THINKING_ENABLED and len(user_input.strip()) >= _THINKING_MIN_LEN:
+                    with _console.status("[bold yellow]🧠[/bold yellow] [dim]Reasoning…[/dim]", spinner="dots"):
+                        _thinking_text, _thnk_in, _thnk_out = await _thinking_phase(user_input)
+                if _thinking_text:
+                    _console.print(f"[bold yellow]🧠[/bold yellow] [dim]{_thinking_text[:300]}{'…' if len(_thinking_text) > 300 else ''}[/dim]\n")
+{% if has_persistence %}
+                    if _cp is not None:
+                        _cp.history.append({"role": "thinking", "content": _thinking_text})
+                        _cp.history_meta.append({
+                            "ts": _dt.now(_tz.utc).isoformat(),
+                            "tokens_in":  _thnk_in,
+                            "tokens_out": _thnk_out,
+                        })
+                        # Count thinking tokens against the run budget
+                        _cp.variables["total_input_tokens"]  += _thnk_in
+                        _cp.variables["total_output_tokens"] += _thnk_out
+                        await _cp.save("in_progress")
+{% endif %}
+                # reasoning_hint is passed to _run_turn; injected as ephemeral system
+                # message so the agent sees it but it never pollutes history
+{% endif %}
+{% if has_planned_execution %}
+                # ── Plan phase ────────────────────────────────────────────────
+                _plan_goal = ""
+                _exec_input = user_input
+                _plan = await _plan_phase(user_input, all_tool_defs)
+                if _plan:
+                    _plan_goal = _plan.get("goal", user_input)
+                    _console.print(f"\n[bold yellow]📋[/bold yellow] [bold]{_plan_goal}[/bold]")
+                    for _s in _plan.get("steps", []):
+                        _console.print(
+                            f"  [dim]{_s.get('id', '?')}.[/dim]"
+                            f" {_s.get('description', '')}"
+                            f" [dim](tool: {_s.get('tool') or 'none'})[/dim]"
+                        )
+                    print()
+                    # Build an execution prompt that embeds the plan so the LLM
+                    # executes it step-by-step without asking for clarification.
+                    _steps_text = "\n".join(
+                        "  {}. {} [tool: {}]".format(
+                            _s.get("id", _si + 1),
+                            _s.get("description", ""),
+                            _s.get("tool") or "any",
+                        )
+                        for _si, _s in enumerate(_plan.get("steps", []))
+                    )
+                    _exec_input = (
+                        "{}\n\n"
+                        "[EXECUTION PLAN — follow every step exactly, no clarifications]\n"
+                        "Goal: {}\n"
+                        "{}\n\n"
+                        "IMPORTANT: After each tool result, immediately call the next tool "
+                        "in the plan WITHOUT writing any intermediate explanation. "
+                        "Only write a final summary after ALL tool steps are complete.\n"
+                        "Begin with step 1 now."
+                    ).format(user_input, _plan_goal, _steps_text)
+                else:
+                    _console.print("[dim]▸ Running in direct mode.[/dim]\n")
+{% endif %}
+{% if has_persistence %}
+                _history_snapshot = len(_cp.history) if _cp is not None else 0
+                if _cp is not None:
+                    _cp.turn_start_history_len = _history_snapshot
+{% endif %}
+{% if not has_persistence %}
+{% if has_any_triggers or has_invoke_server %}
+                # Each trigger/invoke is a separate run — create a fresh checkpointer
+                _saas_cp = _SaaSCheckpointer(
+                    run_id, "run_" + run_id[:8],
+                ) if _SAAS_PERSIST else None
+{% endif %}
+{% endif %}
+{% if has_thinking_step %}
+                if _saas_cp is not None:
+                    _saas_cp.tokens_used += _thnk_in + _thnk_out
+{% endif %}
+                try:
+                    await _run_turn(
+{% if has_planned_execution %}
+                        _exec_input,
+{% else %}
+                        user_input,
+{% endif %}
+                        sessions_by_tool, all_tool_defs,
+{% if has_composio_tools %}
+                        composio_toolset=_composio_toolset,
+                        composio_tool_names=_composio_tool_names,
+{% endif %}
+{% if has_persistence %}
+                        checkpointer=_cp,
+{% endif %}
+{% if has_planned_execution %}
+                        plan_goal=_plan_goal,
+{% elif has_verifier %}
+                        plan_goal=user_input,
+{% endif %}
+                        saas_cp=_saas_cp,
+{% if not has_persistence and not has_any_triggers and not has_invoke_server %}
+                        prior_messages=_stdin_messages,
+                        messages_out=_stdin_messages,
+{% endif %}
+{% if has_thinking_step %}
+                        reasoning_hint=_thinking_text or "",
+{% endif %}
+                    )
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as exc:
+                    print(f"[error] {type(exc).__name__}: {exc}", file=sys.stderr)
+{% if has_persistence %}
+                    if _cp is not None:
+                        # Restore history to pre-turn state so any partial tool_use
+                        # messages without matching tool_result blocks are dropped.
+                        _cp.history      = _cp.history[:_history_snapshot]
+                        _cp.history_meta = _cp.history_meta[:_history_snapshot]
+                        try:
+                            await _cp.save("error")
+                        except Exception:
+                            pass
+{% endif %}
+{% if has_any_triggers or has_invoke_server %}
+                    print("[info] Run failed — will retry on next trigger.", file=sys.stderr)
+                    _post_runner_event("thread_error", {"thread_id": run_id or ""})
+{% else %}
+                    print("[info] Continuing — type your next message.", file=sys.stderr)
+{% endif %}
+                else:
+{% if has_any_triggers or has_invoke_server %}
+                    _post_runner_event("thread_completed", {"thread_id": run_id or "", "model": LITELLM_MODEL})
+{% endif %}
+                    pass
+
+                print()
+{% endif %}{# not is_multi_agent or has_any_triggers #}
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+{% if has_persistence or has_webhook_triggers or has_schedule_triggers or is_multi_agent or has_s3_volumes or is_saas_runner or has_invoke_server %}
+    finally:
+{% if has_persistence %}
+        try:
+            await _store.close()
+        except Exception:
+            pass
+{% endif %}
+{% if has_webhook_triggers or is_multi_agent or is_saas_runner %}
+        try:
+            _uvicorn_server.should_exit = True
+        except Exception:
+            pass
+{% endif %}
+{% if has_schedule_triggers %}
+        try:
+            _scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+{% endif %}
+{% if has_s3_volumes %}
+        try:
+            for _s3_name, _s3_bucket, _s3_prefix, _s3_path in _S3_VOLS_UPLOAD:
+                if _s3_bucket:
+                    _sp.run(["aws", "s3", "sync", _s3_path, f"s3://{_s3_bucket}/{_s3_prefix}"], check=False)
+        except Exception:
+            pass
+{% endif %}
+{% endif %}
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

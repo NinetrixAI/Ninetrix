@@ -1,0 +1,274 @@
+{% if has_webhook_triggers or is_multi_agent or is_saas_runner or has_invoke_server %}
+# ── FastAPI app ───────────────────────────────────────────────────────────────
+
+_app = FastAPI(title="{{ agent.name }}", docs_url=None, redoc_url=None)
+
+{% if has_invoke_server and not is_multi_agent %}
+@_app.get("/health")
+async def _health() -> JSONResponse:
+    return JSONResponse({"status": "ok", "agent": "{{ agent.name }}"})
+
+
+@_app.post("/invoke")
+async def _invoke_handler(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return JSONResponse({"error": "message field is required"}, status_code=422)
+    run_id = uuid.uuid4().hex
+    await _trigger_queue.put({"run_id": run_id, "message": message})
+    return JSONResponse({"run_id": run_id, "status": "queued"}, status_code=202)
+
+{% endif %}
+{% if is_multi_agent %}
+# Multi-agent invoke state — populated in main() after MCP servers start
+AGENTFILE_CONCURRENCY = int(os.environ.get("AGENTFILE_CONCURRENCY", "5"))
+_invoke_state: dict = {
+    "sessions_by_tool": {},
+    "all_tool_defs": [],
+{% if has_composio_tools %}
+    "composio_toolset": None,
+    "composio_tool_names": set(),
+{% endif %}
+    "semaphore": None,
+}
+
+
+@_app.get("/health")
+async def _health() -> JSONResponse:
+    return JSONResponse({"status": "ok", "agent": AGENT_NAME})
+
+
+@_app.post("/invoke")
+async def _invoke_handler(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return JSONResponse({"error": "message field is required"}, status_code=422)
+    thread_id = str(body.get("thread_id") or uuid.uuid4().hex)
+    parent_trace_id = body.get("parent_trace_id") or None
+    _invoke_trace = "run_" + uuid.uuid4().hex[:8]
+
+    _post_runner_event("thread_started", {
+        "thread_id":        thread_id,
+        "trace_id":         _invoke_trace,
+        "parent_trace_id":  parent_trace_id,
+        "agent_id":         AGENT_ID,
+        "trigger":          "invoke",
+        "model":            LITELLM_MODEL,
+    })
+
+{% if has_persistence %}
+    # Create a per-request checkpointer so each thread's steps are saved independently
+    _cp_req: Checkpointer | None = None
+    _store_ref = _invoke_state.get("store")
+    if _store_ref is not None:
+        _cp_req = Checkpointer(
+            _store_ref,
+            thread_id=thread_id,
+            trace_id=_invoke_trace,
+            parent_trace_id=parent_trace_id,
+        )
+        _prior = await _cp_req.load_thread()
+        if _prior:
+            _snap = _prior["checkpoint"] if isinstance(_prior["checkpoint"], dict) else {}
+            _cp_req.history = _snap.get("history", [])
+            _raw_meta = _snap.get("history_meta") or []
+            _cp_req.history_meta = _raw_meta + [{}] * max(0, len(_cp_req.history) - len(_raw_meta))
+            _cp_req.variables = _snap.get("variables", _cp_req.variables)
+            _cp_req.step_index = _prior["step_index"] + 1
+{% endif %}
+
+    result_collector: list = []
+    _sem = _invoke_state.get("semaphore") or asyncio.Semaphore(1)
+    try:
+        async with _sem:
+            await _run_turn(
+                message,
+                _invoke_state["sessions_by_tool"],
+                _invoke_state["all_tool_defs"],
+{% if has_composio_tools %}
+                composio_toolset=_invoke_state["composio_toolset"],
+                composio_tool_names=_invoke_state["composio_tool_names"],
+{% endif %}
+{% if has_persistence %}
+                checkpointer=_cp_req,
+{% endif %}
+                result_collector=result_collector,
+                thread_id=thread_id,
+                saas_cp=_SaaSCheckpointer(thread_id, _invoke_trace) if _SAAS_PERSIST else None,
+            )
+        result = "\n".join(result_collector) if result_collector else "(no output)"
+        _post_runner_event("thread_completed", {
+            "thread_id": thread_id,
+            "model":     LITELLM_MODEL,
+        })
+        return JSONResponse({"status": "completed", "result": result, "thread_id": thread_id})
+    except Exception as exc:
+        _post_runner_event("thread_error", {"thread_id": thread_id})
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+
+{% endif %}
+{% if has_webhook_triggers %}
+{% for trigger in webhook_trigger_defs %}
+@_app.post("{{ trigger.endpoint }}")
+async def _webhook_handler_{{ loop.index }}(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return JSONResponse({"error": "message field is required"}, status_code=422)
+    run_id = uuid.uuid4().hex
+    await _trigger_queue.put({"run_id": run_id, "message": message})
+    return JSONResponse({"run_id": run_id, "status": "queued"}, status_code=202)
+
+{% endfor %}
+{% endif %}
+
+# ── Dashboard chat endpoint ────────────────────────────────────────────────────
+# Isolated from webhook/schedule threads via the "chat-" prefix on thread_id.
+# Runs synchronously — waits for the full agent response before returning.
+
+_chat_state: dict = {
+    "sessions_by_tool": {},
+    "all_tool_defs": [],
+{% if has_composio_tools %}
+    "composio_toolset": None,
+    "composio_tool_names": set(),
+{% endif %}
+{% if has_persistence %}
+    "store": None,
+{% endif %}
+    "histories": {},   # session_id → list of non-system messages (in-memory context store)
+    "ready": False,
+}
+
+
+@_app.post("/chat")
+async def _chat_handler(request: Request) -> JSONResponse:
+    if not _chat_state["ready"]:
+        return JSONResponse({"error": "Agent not ready yet"}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+
+    message = str(body.get("message", "")).strip()
+    if not message:
+        return JSONResponse({"error": "message field is required"}, status_code=422)
+
+    session_id    = str(body.get("session_id") or uuid.uuid4().hex)
+    thread_id     = f"chat-{session_id}"
+    _chat_trace   = "chat_" + session_id[:8]
+
+    # Restore in-memory context for this session (empty list = fresh conversation)
+    _prior_history: list = list(_chat_state["histories"].get(session_id, []))
+    _messages_out:  list = []
+
+    _post_runner_event("thread_started", {
+        "thread_id": thread_id,
+        "trace_id":  _chat_trace,
+        "agent_id":  AGENT_ID,
+        "trigger":   "chat",
+        "model":     LITELLM_MODEL,
+    })
+
+{% if has_persistence %}
+    _cp_chat: Checkpointer | None = None
+    _store_ref = _chat_state.get("store")
+    if _store_ref is not None:
+        _cp_chat = Checkpointer(
+            _store_ref,
+            thread_id=thread_id,
+            trace_id=_chat_trace,
+        )
+        _prior = await _cp_chat.load_thread()
+        if _prior:
+            _snap = _prior["checkpoint"] if isinstance(_prior["checkpoint"], dict) else {}
+            _cp_chat.history    = _snap.get("history", [])
+            _raw_meta = _snap.get("history_meta") or []
+            _cp_chat.history_meta = _raw_meta + [{}] * max(0, len(_cp_chat.history) - len(_raw_meta))
+            _cp_chat.variables  = _snap.get("variables", _cp_chat.variables)
+            _cp_chat.step_index = _prior["step_index"] + 1
+{% endif %}
+
+    result_collector: list = []
+    try:
+        await _run_turn(
+            message,
+            _chat_state["sessions_by_tool"],
+            _chat_state["all_tool_defs"],
+{% if has_composio_tools %}
+            composio_toolset=_chat_state["composio_toolset"],
+            composio_tool_names=_chat_state["composio_tool_names"],
+{% endif %}
+{% if has_persistence %}
+            checkpointer=_cp_chat,
+{% endif %}
+            result_collector=result_collector,
+            thread_id=thread_id,
+            saas_cp=_SaaSCheckpointer(thread_id, _chat_trace) if _SAAS_PERSIST else None,
+            prior_messages=_prior_history,
+            messages_out=_messages_out,
+        )
+        # Persist updated history in-memory for next turn
+        if _messages_out:
+            _chat_state["histories"][session_id] = _messages_out
+        response = "\n".join(result_collector) if result_collector else "(no response)"
+        _post_runner_event("thread_completed", {
+            "thread_id": thread_id,
+            "model":     LITELLM_MODEL,
+        })
+        return JSONResponse({"response": response, "session_id": session_id})
+    except Exception as exc:
+        _post_runner_event("thread_error", {"thread_id": thread_id})
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ── Hot-reload endpoint ────────────────────────────────────────────────────────
+# Called by saas-api when the agent's YAML is updated in the dashboard.
+# Updates mutable runtime settings (model, temperature, system_prompt) in-place
+# without restarting the machine or losing in-flight requests.
+
+@_app.post("/_reload")
+async def _reload_handler(request: Request) -> JSONResponse:
+    if not AGENTFILE_RELOAD_TOKEN:
+        return JSONResponse({"error": "reload not configured"}, status_code=503)
+    auth = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not auth or auth != AGENTFILE_RELOAD_TOKEN:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=422)
+
+    global MODEL, TEMP, SYSTEM_PROMPT, LITELLM_MODEL
+    if "model" in body and body["model"]:
+        MODEL = str(body["model"])
+        LITELLM_MODEL = f"{_PROVIDER_PREFIX.get(PROVIDER, PROVIDER)}/{MODEL}"
+    if "temperature" in body:
+        TEMP = float(body["temperature"])
+    if "system_prompt" in body:
+        SYSTEM_PROMPT = str(body["system_prompt"])
+
+    return JSONResponse({"status": "ok", "model": MODEL, "temperature": TEMP})
+
+
+{% endif %}
+{% if has_schedule_triggers %}
+# ── Schedule helper ───────────────────────────────────────────────────────────
+
+async def _fire_schedule(message: str) -> None:
+    """Enqueues a scheduled trigger into the processing queue."""
+    await _trigger_queue.put({"run_id": uuid.uuid4().hex, "message": message})
+
+{% endif %}

@@ -23,14 +23,14 @@ dependencies = [
 ]
 
 [project.scripts]
-agentfile = "agentfile.cli:cli"
 ninetrix = "agentfile.cli:cli"
+ntx = "agentfile.cli:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agentfile*"]
 
 [tool.setuptools.package-data]
-"agentfile.templates" = ["*.j2", "*.yaml"]
+"agentfile.templates" = ["*.j2", "*.yaml", "includes/*.j2"]
 "agentfile.core" = ["*.json"]
 "agentfile.compose" = ["*.yml", "*.yaml"]
