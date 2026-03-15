@@ -10,7 +10,7 @@ Build, ship, and observe AI agents as portable Docker containers — multi-provi
 
 [![PyPI](https://img.shields.io/pypi/v/ninetrix?color=blue&label=pip%20install%20ninetrix)](https://pypi.org/project/ninetrix/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](./LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2)](https://discord.gg/ninetrix)
+[![Discord](https://img.shields.io/badge/Discord-Join-5865F2)](https://discord.gg/V4yFxnptbk)
 
 <!-- DEMO GIF -->
 <!-- ![ninetrix demo](https://raw.githubusercontent.com/Ninetrix-ai/ninetrix/main/.github/assets/demo.gif) -->
@@ -231,6 +231,30 @@ docker compose -f docker-compose.self-host.yml up -d
 | [`04-research-crew`](./examples/04-research-crew) | 3-agent crew: researcher + writer + reviewer |
 | [`05-scheduled-agent`](./examples/05-scheduled-agent) | Cron-triggered agent |
 | [`06-self-hosted`](./examples/06-self-hosted) | Full self-hosted stack |
+| [`07-local-tools`](./examples/07-local-tools) | Custom Python tools with `@Tool` decorator |
+
+---
+
+## Python SDK
+
+Write custom tools in Python and use them directly in any agent — no MCP server needed.
+
+```python
+from ninetrix import Tool
+
+@Tool
+def calculate_stats(numbers: list[float]) -> dict:
+    """Return mean, min, max for a list of numbers."""
+    return {"mean": sum(numbers) / len(numbers), "min": min(numbers), "max": max(numbers)}
+```
+
+```yaml
+tools:
+  - name: my_tools
+    source: ./tools/my_tools.py   # discovered at build time
+```
+
+→ **[`Ninetrix-ai/python-sdk`](https://github.com/Ninetrix-ai/python-sdk)**
 
 ---
 
@@ -243,7 +267,7 @@ packages/mcp-gateway/  Routes tool calls to MCP workers
 packages/mcp-worker/   Spawns MCP server subprocesses
 packages/dashboard/    Local observability dashboard (Next.js)
 infra/compose/         Docker Compose (dev + self-host)
-examples/              6 ready-to-run agentfile.yaml examples
+examples/              7 ready-to-run agentfile.yaml examples
 schema/v1/             JSON Schema for agentfile.yaml
 ```
 
