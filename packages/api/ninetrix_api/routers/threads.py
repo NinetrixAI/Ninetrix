@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 
 from ninetrix_api import db
-from ninetrix_api.models import AgentSummary, LogEntry, ThreadDetail, ThreadSummary, TimelineEvent
+from ninetrix_api.models import AgentSummary, LogEntry, Page, ThreadDetail, ThreadSummary, TimelineEvent
 
 router = APIRouter()
 
@@ -84,27 +84,33 @@ _VALID_STATUSES = {
 }
 
 
-@router.get("", response_model=list[ThreadSummary])
+@router.get("", response_model=Page[ThreadSummary])
 async def list_threads(
     sort:   str        = "updated_at",
     order:  str        = "desc",
     status: str | None = None,
+    limit:  int        = 50,
+    offset: int        = 0,
 ):
-    """Return the latest checkpoint per thread.
+    """Return a paginated page of latest checkpoints per thread.
 
     Query params:
-    - **sort**: `updated_at` (default) | `step_index` | `tokens_used` | `agent_id` | `status`
+    - **sort**: `updated_at` (default) | `started_at` | `step_index` | `tokens_used` | `agent_id` | `status`
     - **order**: `desc` (default) | `asc`
-    - **status**: filter by exact status value (e.g. `in_progress`, `waiting_for_approval`, `completed`, `error`)
+    - **status**: filter by exact status value (e.g. `in_progress`, `completed`, `error`)
+    - **limit**: page size, 1–200 (default 50)
+    - **offset**: row offset (default 0)
     """
     col  = _SORT_COLS.get(sort, "updated_at")
     dir_ = "ASC" if order == "asc" else "DESC"
+    limit  = max(1, min(limit, 200))
+    offset = max(0, offset)
 
-    # Validate status filter (ignore unknown values)
     status_filter = status if status in _VALID_STATUSES else None
 
     q = f"""
-        SELECT * FROM (
+        SELECT *, COUNT(*) OVER() AS total_count
+        FROM (
             SELECT DISTINCT ON (thread_id)
                 thread_id,
                 agent_id,
@@ -134,8 +140,10 @@ async def list_threads(
         ) agg ON true
         WHERE ($1::text IS NULL OR status = $1)
         ORDER BY {col} {dir_}
+        LIMIT $2 OFFSET $3
     """
-    rows = await db.pool().fetch(q, status_filter)
+    rows = await db.pool().fetch(q, status_filter, limit, offset)
+    total = int(rows[0]["total_count"]) if rows else 0
     result = []
     for r in rows:
         started_at = r["started_at"] if r["started_at"] else r["updated_at"]
@@ -160,7 +168,7 @@ async def list_threads(
             model=r["model"] or "",
             trigger="api",
         ))
-    return result
+    return Page(items=result, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{thread_id}", response_model=ThreadDetail)

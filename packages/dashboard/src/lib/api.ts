@@ -49,6 +49,13 @@ export interface AgentStats {
   last_status: string;
 }
 
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface ApiStatus {
   connected: boolean;
   latencyMs?: number;
@@ -75,16 +82,29 @@ export async function checkApiStatus(): Promise<ApiStatus> {
   }
 }
 
-export async function listThreads(status?: string): Promise<ThreadSummary[]> {
+export async function listThreads(opts?: {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<Page<ThreadSummary>> {
   const params = new URLSearchParams({ sort: "started_at", order: "desc" });
-  if (status) params.set("status", status);
-  return apiFetch<ThreadSummary[]>(`/threads?${params}`);
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  return apiFetch<Page<ThreadSummary>>(`/threads?${params}`);
 }
 
 export async function getThreadTimeline(threadId: string): Promise<TimelineEvent[]> {
   return apiFetch<TimelineEvent[]>(`/threads/${encodeURIComponent(threadId)}/timeline`);
 }
 
-export async function listAgents(): Promise<AgentStats[]> {
-  return apiFetch<AgentStats[]>("/agents");
+export async function listAgents(opts?: {
+  limit?: number;
+  offset?: number;
+}): Promise<Page<AgentStats>> {
+  const params = new URLSearchParams();
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return apiFetch<Page<AgentStats>>(`/agents${qs ? "?" + qs : ""}`);
 }

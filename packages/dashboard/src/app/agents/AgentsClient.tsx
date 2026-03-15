@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { listAgents, checkApiStatus, type AgentStats, type ApiStatus } from "@/lib/api";
 import ThemeToggle from "@/components/ThemeToggle";
 import StatusBadge, { normalizeStatus } from "@/components/StatusBadge";
@@ -175,7 +175,6 @@ function TopNav({
         {[
           { label: "Threads", active: false, href: "/dashboard/threads" },
           { label: "Agents",  active: true,  href: "/dashboard/agents"  },
-          { label: "Settings", active: false, href: "#"                  },
         ].map((tab) => (
           <a
             key={tab.label}
@@ -356,10 +355,71 @@ const STATUS_FILTERS = [
   { key: "error",   label: "Error"   },
 ];
 
+const PAGE_SIZE = 100;
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+function Pagination({
+  total,
+  limit,
+  offset,
+  onChange,
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  onChange: (newOffset: number) => void;
+}) {
+  const pageCount = Math.ceil(total / limit);
+  if (pageCount <= 1) return null;
+  const currentPage = Math.floor(offset / limit);
+  const from = offset + 1;
+  const to = Math.min(offset + limit, total);
+
+  const btn = (disabled: boolean): React.CSSProperties => ({
+    width: 28, height: 28, borderRadius: 5,
+    border: "1px solid var(--border-strong)",
+    background: "transparent",
+    color: disabled ? "var(--text-dim)" : "var(--text-secondary)",
+    cursor: disabled ? "default" : "pointer",
+    fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center",
+    opacity: disabled ? 0.35 : 1,
+  });
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "10px 24px", borderTop: "1px solid var(--border)",
+    }}>
+      <span style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-jb-mono, monospace)" }}>
+        {from}–{to} of {total}
+      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+        <button style={btn(currentPage === 0)} disabled={currentPage === 0}
+          onClick={() => onChange(0)} title="First page">«</button>
+        <button style={btn(currentPage === 0)} disabled={currentPage === 0}
+          onClick={() => onChange((currentPage - 1) * limit)} title="Previous page">‹</button>
+        <span style={{
+          fontSize: 12, color: "var(--text-secondary)", padding: "0 10px",
+          fontFamily: "var(--font-jb-mono, monospace)",
+        }}>
+          {currentPage + 1} / {pageCount}
+        </span>
+        <button style={btn(currentPage >= pageCount - 1)} disabled={currentPage >= pageCount - 1}
+          onClick={() => onChange((currentPage + 1) * limit)} title="Next page">›</button>
+        <button style={btn(currentPage >= pageCount - 1)} disabled={currentPage >= pageCount - 1}
+          onClick={() => onChange((pageCount - 1) * limit)} title="Last page">»</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AgentsClient() {
   const [agents, setAgents] = useState<AgentStats[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [apiStatus, setApiStatus] = useState<ApiStatus | null>(null);
@@ -372,15 +432,16 @@ export default function AgentsClient() {
 
   const fetchAgents = useCallback(async () => {
     try {
-      const data = await listAgents();
-      setAgents(data);
+      const data = await listAgents({ limit: PAGE_SIZE, offset });
+      setAgents(data.items ?? []);
+      setTotal(data.total ?? 0);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offset]);
 
   const fetchStatus = useCallback(async () => {
     const s = await checkApiStatus();
@@ -404,7 +465,7 @@ export default function AgentsClient() {
   }, [autoRefresh, fetchAgents, fetchStatus]);
 
   const counts = {
-    all:     agents.length,
+    all:     total,
     running: agents.filter((a) => normalizeStatus(a.last_status) === "running").length,
     error:   agents.filter((a) => normalizeStatus(a.last_status) === "error").length,
   };
@@ -483,7 +544,7 @@ export default function AgentsClient() {
                 Agents
               </h1>
               <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "var(--text-muted)" }}>
-                {agents.length} total agents · local mode
+                {total} total agents · local mode
               </p>
             </div>
 
@@ -816,6 +877,14 @@ export default function AgentsClient() {
                 })}
               </tbody>
             </table>
+          )}
+          {!loading && !error && (
+            <Pagination
+              total={total}
+              limit={PAGE_SIZE}
+              offset={offset}
+              onChange={(newOffset) => { setOffset(newOffset); setLoading(true); }}
+            />
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { Highlight, type PrismTheme } from "prism-react-renderer";
 import {
@@ -101,6 +101,14 @@ const NODE_CONFIG = {
 
 const TRIGGER_ICONS: Record<string, string> = {
   webhook: "⚡", schedule: "⏱", api: "⬡", manual: "▶", github: "◆",
+};
+
+const zoomBtnStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 26, height: 22, borderRadius: 4, border: "1px solid var(--border-strong)",
+  background: "var(--bg-elevated)", color: "var(--text-secondary)", cursor: "pointer",
+  fontSize: 13, fontWeight: 600, lineHeight: 1, padding: 0,
+  fontFamily: "var(--font-jb-mono, monospace)",
 };
 
 // ─── TriggerChip ─────────────────────────────────────────────────────────────
@@ -226,7 +234,6 @@ function ObservabilityNav({
         {[
           { label: "Threads", href: "/dashboard/threads" },
           { label: "Agents", href: "/dashboard/agents" },
-          { label: "Settings", href: "#" },
         ].map((tab) => (
           <a key={tab.label} href={tab.href} style={{
             display: "inline-flex", alignItems: "center", height: 30, padding: "0 12px",
@@ -361,10 +368,12 @@ function AgentFlow({ agents }: { agents: string[] }) {
 
 // ─── GanttChart ───────────────────────────────────────────────────────────────
 
-const LABEL_W = 240;
+const LABEL_W = 200;
 const ROW_H = 28;
-const RULER_H = 28;
-const PADDING_RIGHT = 16;
+const RULER_H = 32;
+const DURATION_W = 64;
+const DEFAULT_VIEW_MS = 6000;
+const MIN_VIEW_MS = 300;
 
 function GanttChart({
   nodes,
@@ -381,24 +390,51 @@ function GanttChart({
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node: TraceNode } | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(800);
+  const [viewWindowMs, setViewWindowMs] = useState(DEFAULT_VIEW_MS);
+  const initializedRef = useRef(false);
   const isRunning = normalizeStatus(thread.status) === "running";
 
   const totalMs = Math.max(liveMs, 1);
-  const tickInterval = getTickInterval(totalMs);
-  const ticks: number[] = [];
+
+  // Track scroll container's visible width
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const obs = new ResizeObserver(([entry]) => {
+      setContainerWidth(entry.contentRect.width);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  // Set viewWindowMs once we have real data (only on first meaningful totalMs)
+  useEffect(() => {
+    if (!initializedRef.current && totalMs > 100) {
+      initializedRef.current = true;
+      setViewWindowMs(Math.min(totalMs, DEFAULT_VIEW_MS));
+    }
+  }, [totalMs]);
+
+  // Pixel math: trackWidth is the scrollable bar area width (viewport minus fixed columns)
+  const trackWidth = Math.max(containerWidth - LABEL_W - DURATION_W, 100);
+  const pxPerMs = trackWidth / viewWindowMs;
+  const chartAreaPx = Math.max(trackWidth, Math.round(pxPerMs * totalMs));
+
+  // Ticks covering full totalMs range, interval sized for visible window
+  const tickInterval = getTickInterval(viewWindowMs);
+  const rawTicks: number[] = [];
   for (let t = 0; t <= totalMs + tickInterval; t += tickInterval) {
     if (t > totalMs * 1.05) break;
-    ticks.push(Math.min(t, totalMs));
+    rawTicks.push(Math.min(t, totalMs));
   }
-  if (ticks[ticks.length - 1] < totalMs) ticks.push(totalMs);
-
-  // Deduplicate ticks
-  const uniqueTicks = Array.from(new Set(ticks));
+  if (rawTicks[rawTicks.length - 1] < totalMs) rawTicks.push(totalMs);
+  const uniqueTicks = Array.from(new Set(rawTicks));
 
   // Group nodes by agentId for multi-agent display
-  const agents = useMemo(() => {
+  const agentMap = useMemo(() => {
     const map = new Map<string, TraceNode[]>();
     for (const n of nodes) {
       const arr = map.get(n.agentId) ?? [];
@@ -408,196 +444,276 @@ function GanttChart({
     return map;
   }, [nodes]);
 
-  const isMultiAgent = agents.size > 1;
+  const isMultiAgent = agentMap.size > 1;
+
+  // Zoom controls
+  const zoomIn = () => setViewWindowMs((v) => Math.max(MIN_VIEW_MS, v / 1.6));
+  const zoomOut = () => setViewWindowMs((v) => Math.min(totalMs, v * 1.6));
+  const zoomDefault = () => {
+    setViewWindowMs(Math.min(totalMs, DEFAULT_VIEW_MS));
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  };
+  const zoomFit = () => {
+    setViewWindowMs(totalMs);
+    if (scrollRef.current) scrollRef.current.scrollLeft = 0;
+  };
+
+  const zoomLabel = viewWindowMs < 1000
+    ? `${Math.round(viewWindowMs)}ms`
+    : `${(viewWindowMs / 1000).toFixed(1)}s`;
+
+  // Shared bg for sticky cells (matches surface, can't be transparent in scroll container)
+  const stickyBg = "var(--bg-surface)";
 
   return (
-    <div ref={containerRef} style={{ width: "100%", overflowX: "auto", overflowY: "visible" }}>
-      {/* Time Ruler */}
+    <div style={{ width: "100%" }}>
+
+      {/* ── Zoom toolbar ── */}
       <div style={{
-        display: "flex", height: RULER_H, alignItems: "flex-end", paddingBottom: 6,
-        borderBottom: "1px solid var(--border)", position: "sticky", top: 0,
-        background: "var(--bg-surface)", zIndex: 10,
+        display: "flex", alignItems: "center", gap: 5, padding: "6px 10px 8px",
+        borderBottom: "1px solid var(--border)",
       }}>
-        {/* Label column spacer */}
-        <div style={{ width: LABEL_W, flexShrink: 0 }} />
-        {/* Tick area */}
-        <div style={{ flex: 1, position: "relative", paddingRight: PADDING_RIGHT }}>
-          {uniqueTicks.map((t) => {
-            const pct = (t / totalMs) * 100;
-            return (
-              <span key={t} style={{
-                position: "absolute", left: `${pct}%`,
-                transform: t === totalMs ? "translateX(-100%)" : t === 0 ? "none" : "translateX(-50%)",
-                fontSize: 10, fontFamily: "var(--font-jb-mono, monospace)",
-                color: "var(--text-dim)", whiteSpace: "nowrap", lineHeight: 1,
+        <span style={{
+          fontSize: 9.5, fontWeight: 700, letterSpacing: "0.09em",
+          color: "var(--text-dim)", fontFamily: "var(--font-jb-mono, monospace)", marginRight: 2,
+        }}>ZOOM</span>
+        <button onClick={zoomIn} title="Zoom in (show less time)" style={zoomBtnStyle}>+</button>
+        <button onClick={zoomOut} title="Zoom out (show more time)" style={zoomBtnStyle}>−</button>
+        <span style={{
+          fontSize: 10, fontFamily: "var(--font-jb-mono, monospace)", color: "var(--text-secondary)",
+          padding: "1px 7px", borderRadius: 3, background: "var(--border)",
+          border: "1px solid var(--border-strong)", minWidth: 42, textAlign: "center",
+        }}>
+          {zoomLabel}/view
+        </span>
+        <button onClick={zoomDefault} title="Reset to 6s view" style={{ ...zoomBtnStyle, width: "auto", padding: "0 8px", fontSize: 11 }}>6s</button>
+        <button onClick={zoomFit} title="Fit entire trace" style={{ ...zoomBtnStyle, width: "auto", padding: "0 8px", fontSize: 11 }}>Fit</button>
+        {totalMs > viewWindowMs && (
+          <span style={{
+            fontSize: 10, color: "var(--text-dim)", marginLeft: 4,
+            fontFamily: "var(--font-jb-mono, monospace)",
+          }}>
+            · scroll to see full {(totalMs / 1000).toFixed(1)}s
+          </span>
+        )}
+      </div>
+
+      {/* ── Scrollable chart ── */}
+      <div ref={scrollRef} style={{ width: "100%", overflowX: "auto", overflowY: "visible" }}>
+        {/* Inner canvas — wider than viewport when zoomed in */}
+        <div style={{ width: LABEL_W + chartAreaPx + DURATION_W, minWidth: "100%" }}>
+
+          {/* Time Ruler */}
+          <div style={{
+            display: "flex", height: RULER_H, alignItems: "flex-end", paddingBottom: 6,
+            borderBottom: "1px solid var(--border)", position: "sticky", top: 0,
+            background: stickyBg, zIndex: 10,
+          }}>
+            {/* Label spacer — sticky left */}
+            <div style={{
+              width: LABEL_W, flexShrink: 0,
+              position: "sticky", left: 0, zIndex: 12,
+              background: stickyBg,
+            }} />
+            {/* Tick area */}
+            <div style={{ width: chartAreaPx, flexShrink: 0, position: "relative" }}>
+              {uniqueTicks.map((t) => {
+                const px = Math.round(t * pxPerMs);
+                return (
+                  <span key={t} style={{
+                    position: "absolute", left: px,
+                    transform: t === totalMs ? "translateX(-100%)" : t === 0 ? "none" : "translateX(-50%)",
+                    fontSize: 10, fontFamily: "var(--font-jb-mono, monospace)",
+                    color: "var(--text-dim)", whiteSpace: "nowrap", lineHeight: 1,
+                  }}>
+                    {formatTickLabel(t)}
+                  </span>
+                );
+              })}
+              {isRunning && (
+                <span style={{
+                  position: "absolute", left: chartAreaPx, fontSize: 9.5,
+                  fontFamily: "var(--font-jb-mono, monospace)", color: "#10B981",
+                  whiteSpace: "nowrap", transform: "translateX(-100%)", fontWeight: 600,
+                }}>
+                  NOW
+                </span>
+              )}
+            </div>
+            {/* Duration spacer — sticky right */}
+            <div style={{
+              width: DURATION_W, flexShrink: 0,
+              position: "sticky", right: 0, zIndex: 12,
+              background: stickyBg,
+            }} />
+          </div>
+
+          {/* Grid + Bars */}
+          <div style={{ position: "relative" }}>
+            {/* Background grid lines (absolute, offset by LABEL_W) */}
+            {uniqueTicks.slice(1).map((t) => (
+              <div key={t} style={{
+                position: "absolute",
+                left: LABEL_W + Math.round(t * pxPerMs),
+                top: 0, bottom: 0, width: 1,
+                background: "rgba(148,163,184,0.05)",
+                zIndex: 0, pointerEvents: "none",
+              }} />
+            ))}
+
+            {/* Live cursor */}
+            {isRunning && (
+              <div style={{
+                position: "absolute",
+                left: LABEL_W + chartAreaPx,
+                top: 0, bottom: 0, width: 2,
+                background: "rgba(16,185,129,0.6)", zIndex: 5, pointerEvents: "none",
+                boxShadow: "0 0 8px rgba(16,185,129,0.4)",
+              }} />
+            )}
+
+            {/* Rows */}
+            {nodes.map((node, idx) => {
+              const cfg = NODE_CONFIG[node.type];
+              const leftPx = Math.round(node.startOffsetMs * pxPerMs);
+              const widthPx = node.durationMs
+                ? Math.max(4, Math.round(node.durationMs * pxPerMs))
+                : node.status === "running"
+                  ? Math.max(8, Math.round((liveMs - node.startOffsetMs) * pxPerMs))
+                  : 4;
+              const isHovered = hoveredId === node.id;
+              const isSelected = selectedId === node.id;
+              const isNodeRunning = node.status === "running";
+              const isError = node.status === "error";
+
+              const prevNode = nodes[idx - 1];
+              const showAgentHeader = isMultiAgent && node.agentId !== prevNode?.agentId;
+
+              // Sticky cell background: must be opaque
+              const rowBg = isSelected ? cfg.dimColor : isHovered ? "rgba(30,30,36,1)" : stickyBg;
+
+              return (
+                <div key={node.id}>
+                  {showAgentHeader && (
+                    <div style={{
+                      display: "flex", alignItems: "center", height: 22,
+                      borderTop: idx > 0 ? "1px solid var(--border)" : "none",
+                      marginTop: idx > 0 ? 4 : 0,
+                    }}>
+                      <div style={{
+                        width: LABEL_W, flexShrink: 0,
+                        position: "sticky", left: 0, zIndex: 4,
+                        background: stickyBg, paddingLeft: 8, height: "100%",
+                        display: "flex", alignItems: "center",
+                      }}>
+                        <span style={{
+                          fontSize: 9.5, fontWeight: 700, letterSpacing: "0.07em",
+                          color: "var(--text-dim)", fontFamily: "var(--font-jb-mono, monospace)",
+                        }}>
+                          AGENT: {node.agentId}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    onMouseEnter={(e) => { setHoveredId(node.id); setTooltip({ x: e.clientX, y: e.clientY, node }); }}
+                    onMouseMove={(e) => { setTooltip((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null); }}
+                    onMouseLeave={() => { setHoveredId(null); setTooltip(null); }}
+                    onClick={() => onSelect(node)}
+                    style={{
+                      display: "flex", alignItems: "stretch", height: ROW_H,
+                      cursor: "pointer",
+                      background: isSelected ? cfg.dimColor : isHovered ? "rgba(148,163,184,0.04)" : "transparent",
+                      transition: "background 0.1s",
+                    }}
+                  >
+                    {/* Label — sticky left */}
+                    <div style={{
+                      width: LABEL_W, flexShrink: 0,
+                      display: "flex", alignItems: "center", gap: 6,
+                      paddingLeft: 8 + node.depth * 12, paddingRight: 10,
+                      position: "sticky", left: 0, zIndex: 3,
+                      background: rowBg,
+                      borderLeft: isSelected ? `2px solid ${cfg.color}` : "2px solid transparent",
+                    }}>
+                      <span style={{ fontSize: 10, color: isError ? "#EF4444" : cfg.color, flexShrink: 0 }}>
+                        {isError ? "✕" : cfg.icon}
+                      </span>
+                      <span style={{
+                        fontSize: 11.5, fontFamily: "var(--font-jb-mono, monospace)",
+                        color: isError ? "#EF4444" : isSelected ? "var(--text-primary)" : "var(--text-secondary)",
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        fontWeight: isSelected ? 500 : 400,
+                      }}>
+                        {node.label}
+                      </span>
+                      {isNodeRunning && (
+                        <span style={{
+                          width: 5, height: 5, borderRadius: "50%", background: "#10B981",
+                          flexShrink: 0, animation: "pulse-ring 1.6s ease-in-out infinite",
+                        }} />
+                      )}
+                    </div>
+
+                    {/* Bar track */}
+                    <div style={{ width: chartAreaPx, flexShrink: 0, height: ROW_H, position: "relative" }}>
+                      <div style={{
+                        position: "absolute",
+                        left: leftPx,
+                        width: widthPx,
+                        top: 6, bottom: 6,
+                        borderRadius: 3,
+                        background: isError ? "rgba(239,68,68,0.7)" : isHovered ? cfg.color : `${cfg.color}BB`,
+                        transition: "left 0.2s ease, width 0.2s ease",
+                        minWidth: 4,
+                        boxShadow: isNodeRunning ? `0 0 6px ${cfg.color}66` : "none",
+                      }} />
+                      {isNodeRunning && (
+                        <div style={{
+                          position: "absolute",
+                          left: leftPx + widthPx,
+                          width: 3, top: 6, bottom: 6,
+                          background: cfg.color,
+                          borderRadius: "0 3px 3px 0",
+                          animation: "pulse-ring 1s ease-in-out infinite",
+                          transition: "left 0.2s ease",
+                        }} />
+                      )}
+                    </div>
+
+                    {/* Duration — sticky right */}
+                    <div style={{
+                      width: DURATION_W, flexShrink: 0,
+                      display: "flex", alignItems: "center", justifyContent: "flex-end",
+                      paddingRight: 14,
+                      fontSize: 10.5, fontFamily: "var(--font-jb-mono, monospace)",
+                      color: isError ? "#EF4444" : "var(--text-dim)",
+                      position: "sticky", right: 0, zIndex: 3,
+                      background: rowBg,
+                    }}>
+                      {isNodeRunning ? "…" : formatDuration(node.durationMs)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {nodes.length === 0 && (
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                height: 120, color: "var(--text-dim)", fontSize: 12,
+                fontFamily: "var(--font-jb-mono, monospace)", gap: 8,
               }}>
-                {formatTickLabel(t)}
-              </span>
-            );
-          })}
-          {/* Live cursor label */}
-          {isRunning && (
-            <span style={{
-              position: "absolute", left: "100%", fontSize: 9.5,
-              fontFamily: "var(--font-jb-mono, monospace)", color: "#10B981",
-              whiteSpace: "nowrap", transform: "translateX(-100%)", fontWeight: 600,
-            }}>
-              NOW
-            </span>
-          )}
+                <span style={{ opacity: 0.4 }}>◌</span>
+                Waiting for events…
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Grid + Bars */}
-      <div style={{ position: "relative" }}>
-        {/* Background grid lines */}
-        {uniqueTicks.slice(1).map((t) => {
-          const pct = (t / totalMs) * 100;
-          return (
-            <div key={t} style={{
-              position: "absolute",
-              left: `calc(${LABEL_W}px + (100% - ${LABEL_W + PADDING_RIGHT}px) * ${pct / 100})`,
-              top: 0, bottom: 0, width: 1,
-              background: "rgba(148,163,184,0.05)", zIndex: 0, pointerEvents: "none",
-            }} />
-          );
-        })}
-
-        {/* Live cursor */}
-        {isRunning && (
-          <div style={{
-            position: "absolute",
-            left: `calc(${LABEL_W}px + (100% - ${LABEL_W + PADDING_RIGHT}px) * 1)`,
-            top: 0, bottom: 0, width: 2,
-            background: "rgba(16,185,129,0.6)", zIndex: 5, pointerEvents: "none",
-            boxShadow: "0 0 8px rgba(16,185,129,0.4)",
-          }} />
-        )}
-
-        {/* Rows */}
-        {nodes.map((node, idx) => {
-          const cfg = NODE_CONFIG[node.type];
-          const leftPct = (node.startOffsetMs / totalMs) * 100;
-          const widthPct = node.durationMs
-            ? Math.max(0.4, (node.durationMs / totalMs) * 100)
-            : node.status === "running" ? Math.max(0.8, ((liveMs - node.startOffsetMs) / totalMs) * 100) : 1;
-          const isHovered = hoveredId === node.id;
-          const isSelected = selectedId === node.id;
-          const isNodeRunning = node.status === "running";
-          const isError = node.status === "error";
-
-          // Agent separator
-          const prevNode = nodes[idx - 1];
-          const showAgentHeader = isMultiAgent && node.agentId !== prevNode?.agentId;
-
-          return (
-            <div key={node.id}>
-              {showAgentHeader && (
-                <div style={{
-                  display: "flex", alignItems: "center", height: 22,
-                  paddingLeft: 8, borderTop: idx > 0 ? "1px solid var(--border)" : "none",
-                  marginTop: idx > 0 ? 4 : 0,
-                }}>
-                  <span style={{
-                    fontSize: 9.5, fontWeight: 700, letterSpacing: "0.07em",
-                    color: "var(--text-dim)", fontFamily: "var(--font-jb-mono, monospace)",
-                  }}>
-                    AGENT: {node.agentId}
-                  </span>
-                </div>
-              )}
-              <div
-                onMouseEnter={(e) => {
-                  setHoveredId(node.id);
-                  setTooltip({ x: e.clientX, y: e.clientY, node });
-                }}
-                onMouseMove={(e) => {
-                  setTooltip((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
-                }}
-                onMouseLeave={() => { setHoveredId(null); setTooltip(null); }}
-                onClick={() => onSelect(node)}
-                style={{
-                  display: "flex", alignItems: "center", height: ROW_H,
-                  cursor: "pointer",
-                  background: isSelected ? cfg.dimColor : isHovered ? "rgba(148,163,184,0.04)" : "transparent",
-                  borderLeft: isSelected ? `2px solid ${cfg.color}` : "2px solid transparent",
-                  transition: "background 0.1s",
-                  paddingLeft: node.depth * 16,
-                }}
-              >
-                {/* Label */}
-                <div style={{
-                  width: LABEL_W - node.depth * 16, flexShrink: 0,
-                  display: "flex", alignItems: "center", gap: 6, paddingRight: 10,
-                }}>
-                  <span style={{ fontSize: 10, color: isError ? "#EF4444" : cfg.color, flexShrink: 0 }}>
-                    {isError ? "✕" : cfg.icon}
-                  </span>
-                  <span style={{
-                    fontSize: 11.5, fontFamily: "var(--font-jb-mono, monospace)",
-                    color: isError ? "#EF4444" : isSelected ? "var(--text-primary)" : "var(--text-secondary)",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isSelected ? 500 : 400,
-                  }}>
-                    {node.label}
-                  </span>
-                  {isNodeRunning && (
-                    <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#10B981", flexShrink: 0, animation: "pulse-ring 1.6s ease-in-out infinite" }} />
-                  )}
-                </div>
-
-                {/* Bar track */}
-                <div style={{ flex: 1, height: ROW_H, position: "relative", paddingRight: PADDING_RIGHT }}>
-                  <div style={{
-                    position: "absolute",
-                    left: `${leftPct}%`,
-                    width: `${widthPct}%`,
-                    top: 6, bottom: 6,
-                    borderRadius: 3,
-                    background: isError ? "rgba(239,68,68,0.7)" : isHovered ? cfg.color : `${cfg.color}BB`,
-                    transition: "left 0.25s ease, width 0.25s ease",
-                    minWidth: 4,
-                    boxShadow: isNodeRunning ? `0 0 6px ${cfg.color}66` : "none",
-                  }} />
-                  {/* Running bar animated right edge */}
-                  {isNodeRunning && (
-                    <div style={{
-                      position: "absolute",
-                      left: `calc(${leftPct}% + ${widthPct}%)`,
-                      width: 3, top: 6, bottom: 6,
-                      background: cfg.color,
-                      borderRadius: "0 3px 3px 0",
-                      animation: "pulse-ring 1s ease-in-out infinite",
-                      transition: "left 0.25s ease",
-                    }} />
-                  )}
-                </div>
-
-                {/* Duration */}
-                <div style={{
-                  width: 64, flexShrink: 0, textAlign: "right", paddingRight: 16,
-                  fontSize: 10.5, fontFamily: "var(--font-jb-mono, monospace)",
-                  color: isError ? "#EF4444" : "var(--text-dim)",
-                }}>
-                  {isNodeRunning ? "…" : formatDuration(node.durationMs)}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {nodes.length === 0 && (
-          <div style={{
-            display: "flex", alignItems: "center", justifyContent: "center",
-            height: 120, color: "var(--text-dim)", fontSize: 12,
-            fontFamily: "var(--font-jb-mono, monospace)", gap: 8,
-          }}>
-            <span style={{ opacity: 0.4 }}>◌</span>
-            Waiting for events…
-          </div>
-        )}
-      </div>
-
-      {/* Tooltip — fixed to viewport so it's never clipped by card overflow */}
+      {/* Tooltip — fixed to viewport */}
       {tooltip && (() => {
         const TOOLTIP_W = 180;
         const OFFSET_X = 14;
@@ -1054,7 +1170,7 @@ export default function ObservabilityClient() {
 
     async function load() {
       try {
-        const threads = await listThreads();
+        const { items: threads } = await listThreads({ limit: 200 });
         const found = threads.find((t) => t.thread_id === threadId);
         if (!found) { setError(`Thread "${threadId}" not found`); setLoading(false); return; }
         if (cancelled) return;
@@ -1075,7 +1191,7 @@ export default function ObservabilityClient() {
     if (!thread || !isRunning) return;
     pollRef.current = setInterval(async () => {
       try {
-        const threads = await listThreads();
+        const { items: threads } = await listThreads({ limit: 200 });
         const updated = threads.find((t) => t.thread_id === thread.thread_id);
         if (updated) {
           setThread(updated);

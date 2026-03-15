@@ -206,7 +206,6 @@ function TopNav({
         {[
           { label: "Threads", active: true, href: "/dashboard/threads" },
           { label: "Agents", active: false, href: "/dashboard/agents" },
-          { label: "Settings", active: false, href: "#" },
         ].map((tab) => (
           <a
             key={tab.label}
@@ -1823,10 +1822,71 @@ const STATUS_FILTERS = [
   { key: "pending", label: "Pending" },
 ];
 
+const PAGE_SIZE = 50;
+
+// ─── Pagination ───────────────────────────────────────────────────────────────
+
+function Pagination({
+  total,
+  limit,
+  offset,
+  onChange,
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  onChange: (newOffset: number) => void;
+}) {
+  const pageCount = Math.ceil(total / limit);
+  if (pageCount <= 1) return null;
+  const currentPage = Math.floor(offset / limit);
+  const from = offset + 1;
+  const to = Math.min(offset + limit, total);
+
+  const btn = (disabled: boolean): React.CSSProperties => ({
+    width: 28, height: 28, borderRadius: 5,
+    border: "1px solid var(--border-strong)",
+    background: "transparent",
+    color: disabled ? "var(--text-dim)" : "var(--text-secondary)",
+    cursor: disabled ? "default" : "pointer",
+    fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center",
+    opacity: disabled ? 0.35 : 1,
+  });
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "10px 24px", borderTop: "1px solid var(--border)",
+    }}>
+      <span style={{ fontSize: 12, color: "var(--text-muted)", fontFamily: "var(--font-jb-mono, monospace)" }}>
+        {from}–{to} of {total}
+      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: 3 }}>
+        <button style={btn(currentPage === 0)} disabled={currentPage === 0}
+          onClick={() => onChange(0)} title="First page">«</button>
+        <button style={btn(currentPage === 0)} disabled={currentPage === 0}
+          onClick={() => onChange((currentPage - 1) * limit)} title="Previous page">‹</button>
+        <span style={{
+          fontSize: 12, color: "var(--text-secondary)", padding: "0 10px",
+          fontFamily: "var(--font-jb-mono, monospace)",
+        }}>
+          {currentPage + 1} / {pageCount}
+        </span>
+        <button style={btn(currentPage >= pageCount - 1)} disabled={currentPage >= pageCount - 1}
+          onClick={() => onChange((currentPage + 1) * limit)} title="Next page">›</button>
+        <button style={btn(currentPage >= pageCount - 1)} disabled={currentPage >= pageCount - 1}
+          onClick={() => onChange((pageCount - 1) * limit)} title="Last page">»</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function ThreadsClient() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ThreadSummary | null>(null);
@@ -1838,14 +1898,24 @@ export default function ThreadsClient() {
 
   const fetchThreads = useCallback(async () => {
     try {
-      const data = await listThreads(statusFilter || undefined);
-      setThreads(data);
+      const data = await listThreads({
+        status: statusFilter || undefined,
+        limit: PAGE_SIZE,
+        offset,
+      });
+      setThreads(data.items ?? []);
+      setTotal(data.total ?? 0);
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load threads");
     } finally {
       setLoading(false);
     }
+  }, [statusFilter, offset]);
+
+  // Reset to page 1 when status filter changes
+  useEffect(() => {
+    setOffset(0);
   }, [statusFilter]);
 
   const checkStatus = useCallback(async () => {
@@ -1887,14 +1957,7 @@ export default function ThreadsClient() {
     );
   });
 
-  // Count by status
-  const counts = {
-    "": threads.length,
-    running: threads.filter((t) => normalizeStatus(t.status) === "running").length,
-    completed: threads.filter((t) => normalizeStatus(t.status) === "completed").length,
-    error: threads.filter((t) => normalizeStatus(t.status) === "error").length,
-    pending: threads.filter((t) => normalizeStatus(t.status) === "pending").length,
-  };
+  // Total count comes from the API; used on the active filter tab only
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg-base)" }}>
@@ -1943,7 +2006,7 @@ export default function ThreadsClient() {
                   color: "var(--text-muted)",
                 }}
               >
-                {threads.length} total runs · local mode
+                {total} total runs · local mode
               </p>
             </div>
 
@@ -1987,14 +2050,10 @@ export default function ThreadsClient() {
           <div style={{ display: "flex", gap: 4 }}>
             {STATUS_FILTERS.map((f) => {
               const isActive = statusFilter === f.key;
-              const count = counts[f.key as keyof typeof counts] ?? 0;
               return (
                 <button
                   key={f.key}
-                  onClick={() => {
-                    setStatusFilter(f.key);
-                    setLoading(true);
-                  }}
+                  onClick={() => setStatusFilter(f.key)}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -2004,9 +2063,7 @@ export default function ThreadsClient() {
                     border: isActive
                       ? "1px solid rgba(59,130,246,0.3)"
                       : "1px solid var(--border-strong)",
-                    background: isActive
-                      ? "var(--accent-blue-dim)"
-                      : "transparent",
+                    background: isActive ? "var(--accent-blue-dim)" : "transparent",
                     color: isActive ? "var(--accent-blue)" : "var(--text-muted)",
                     fontSize: 12,
                     fontWeight: isActive ? 600 : 400,
@@ -2015,21 +2072,14 @@ export default function ThreadsClient() {
                   }}
                 >
                   {f.label}
-                  {count > 0 && (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        background: isActive
-                          ? "rgba(59,130,246,0.15)"
-                          : "var(--border-strong)",
-                        color: isActive ? "var(--accent-blue)" : "var(--text-muted)",
-                        padding: "0 5px",
-                        borderRadius: 10,
-                        minWidth: 16,
-                        textAlign: "center",
-                      }}
-                    >
-                      {count}
+                  {isActive && total > 0 && (
+                    <span style={{
+                      fontSize: 10,
+                      background: "rgba(59,130,246,0.15)",
+                      color: "var(--accent-blue)",
+                      padding: "0 5px", borderRadius: 10, minWidth: 16, textAlign: "center",
+                    }}>
+                      {total}
                     </span>
                   )}
                 </button>
@@ -2148,11 +2198,19 @@ export default function ThreadsClient() {
           )}
 
           {!loading && !error && filteredThreads.length > 0 && (
-            <ThreadsTable
-              threads={filteredThreads}
-              onSelect={setSelected}
-              selectedId={selected?.thread_id ?? null}
-            />
+            <>
+              <ThreadsTable
+                threads={filteredThreads}
+                onSelect={setSelected}
+                selectedId={selected?.thread_id ?? null}
+              />
+              <Pagination
+                total={total}
+                limit={PAGE_SIZE}
+                offset={offset}
+                onChange={(newOffset) => { setOffset(newOffset); setLoading(true); }}
+              />
+            </>
           )}
         </div>
       </div>

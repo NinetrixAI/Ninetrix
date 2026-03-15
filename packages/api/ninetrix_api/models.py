@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel
+
+T = TypeVar("T")
+
+
+# ── Pagination ────────────────────────────────────────────────────────────────
+
+class Page(BaseModel, Generic[T]):
+    """Paginated envelope returned by list endpoints."""
+    items: list[T]
+    total: int   # total matching rows (before limit/offset)
+    limit: int
+    offset: int
 
 
 # ── Threads ───────────────────────────────────────────────────────────────────
