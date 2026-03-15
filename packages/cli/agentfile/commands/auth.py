@@ -15,6 +15,14 @@ from agentfile.core.auth import (
     clear_token,
     save_token,
 )
+from agentfile.core.config import (
+    CONFIG_FILE,
+    _CLOUD_DEFAULT,
+    api_url_source,
+    get_api_url,
+    resolve_api_url,
+    set_api_url,
+)
 
 console = Console()
 
@@ -29,11 +37,29 @@ def auth_cmd() -> None:
 @click.option("--token", "-t", required=True, metavar="TOKEN",
               help="Personal access token from the Ninetrix dashboard (Settings → API Keys)")
 @click.option("--api-url", default=None, metavar="URL",
-              help="API URL (overrides AGENTFILE_API_URL, default: http://localhost:8000)")
+              help=f"API endpoint to connect to (saved to {CONFIG_FILE}). "
+                   f"Defaults to {_CLOUD_DEFAULT}.")
 def auth_login(token: str, api_url: str | None) -> None:
-    """Save an API token — enables credential injection in ninetrix run/up."""
-    url = api_url or os.environ.get("AGENTFILE_API_URL", "http://localhost:8000")
+    """Authenticate with the Ninetrix API.
+
+    Saves the token to ~/.agentfile/auth.json and the API URL to
+    ~/.agentfile/config.json so every subsequent `ninetrix run/up`
+    works without any env vars or .env files.
+
+    \b
+    Examples:
+      ninetrix auth login --token nxt_xxxxx
+      ninetrix auth login --token nxt_xxxxx --api-url https://api.ninetrix.io
+    """
     console.print()
+
+    # Resolve URL: flag > env var > existing config > cloud default
+    url = (
+        api_url
+        or os.environ.get("AGENTFILE_API_URL")
+        or get_api_url()
+        or _CLOUD_DEFAULT
+    )
 
     # Verify the token against the live API before saving
     try:
@@ -43,21 +69,29 @@ def auth_login(token: str, api_url: str | None) -> None:
             timeout=5,
         )
         if resp.status_code == 401:
-            console.print("[red]Token rejected — double-check it's correct.[/red]\n")
+            console.print("  [red]✗[/red] Token rejected — double-check it's correct.\n")
             raise SystemExit(1)
         if resp.status_code not in (200,):
             console.print(
-                f"  [yellow]Warning:[/yellow] API returned {resp.status_code}. "
-                "Saving anyway."
+                f"  [yellow]⚠[/yellow]  API returned {resp.status_code}. "
+                "Saving credentials anyway."
             )
     except httpx.ConnectError:
         console.print(
-            f"  [yellow]Warning:[/yellow] Could not reach [dim]{url}[/dim] — saving token anyway."
+            f"  [yellow]⚠[/yellow]  Could not reach [dim]{url}[/dim] — "
+            "saving credentials anyway (check the URL if this persists)."
         )
 
     save_token(token)
-    console.print(f"  [green]✓[/green] Token saved → [dim]{TOKEN_FILE}[/dim]")
-    console.print(f"  [dim]API:[/dim] {url}\n")
+    set_api_url(url)
+
+    console.print(f"  [green]✓[/green] Token saved    → [dim]{TOKEN_FILE}[/dim]")
+    console.print(f"  [green]✓[/green] API URL saved  → [dim]{CONFIG_FILE}[/dim]")
+    console.print(f"\n  [dim]API:[/dim] {url}")
+    console.print(
+        "\n  All [bold]ninetrix run/up[/bold] commands will now send telemetry "
+        "to this API automatically — no env vars or .env files needed.\n"
+    )
 
 
 @auth_cmd.command("logout")
@@ -72,32 +106,34 @@ def auth_logout() -> None:
 
 
 @auth_cmd.command("status")
-@click.option("--api-url", default=None, metavar="URL", help="API URL to check")
+@click.option("--api-url", default=None, metavar="URL", help="Override API URL to check")
 def auth_status(api_url: str | None) -> None:
     """Show which auth method is active and whether the API is reachable."""
-    url = api_url or os.environ.get("AGENTFILE_API_URL", "http://localhost:8000")
+    from agentfile.core.config import resolve_api_url, api_url_source
+    url = api_url or resolve_api_url()
+    url_source = api_url_source() if not api_url else "flag"
     console.print()
     console.print("[bold]ninetrix auth status[/bold]\n")
 
-    # Determine which source the token comes from
+    # Token source
     if os.environ.get("AGENTFILE_API_TOKEN"):
-        method = "env var [dim](AGENTFILE_API_TOKEN)[/dim]"
+        token_method = "env var [dim](AGENTFILE_API_TOKEN)[/dim]"
     elif TOKEN_FILE.exists():
         try:
             data = json.loads(TOKEN_FILE.read_text())
             if data.get("token"):
-                method = f"token file [dim]({TOKEN_FILE})[/dim]"
+                token_method = f"token file [dim]({TOKEN_FILE})[/dim]"
             else:
-                method = "[dim]token file (empty)[/dim]"
+                token_method = "[dim]token file (empty)[/dim]"
         except Exception:
-            method = "[dim]token file (unreadable)[/dim]"
+            token_method = "[dim]token file (unreadable)[/dim]"
     elif SECRET_FILE.exists():
-        method = f"machine secret [dim]({SECRET_FILE})[/dim]"
+        token_method = f"machine secret [dim]({SECRET_FILE})[/dim]"
     else:
-        method = "[yellow]none[/yellow]"
+        token_method = "[yellow]none[/yellow]"
 
-    console.print(f"  [dim]Auth method:[/dim]  {method}")
-    console.print(f"  [dim]API URL:    [/dim]  {url}")
+    console.print(f"  [dim]API URL:    [/dim]  {url}  [dim]({url_source})[/dim]")
+    console.print(f"  [dim]Token:      [/dim]  {token_method}")
 
     # Connectivity check
     try:

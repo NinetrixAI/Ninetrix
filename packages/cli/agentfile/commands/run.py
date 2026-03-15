@@ -113,7 +113,8 @@ def _read_machine_secret() -> str | None:
 def _inject_integration_credentials(env: dict[str, str]) -> None:
     """Query the Integration Hub API and inject credentials as env vars. Silent on failure."""
     from agentfile.core.auth import auth_headers
-    api_url = os.environ.get("AGENTFILE_API_URL", "http://localhost:8000")
+    from agentfile.core.config import resolve_api_url
+    api_url = os.environ.get("AGENTFILE_API_URL") or resolve_api_url()
     try:
         resp = httpx.get(
             f"{api_url}/integrations/credentials",
@@ -123,7 +124,7 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
         if resp.status_code == 200:
             for _integration_id, creds in resp.json().items():
                 for key, value in creds.items():
-                    env[key] = value
+                    env.setdefault(key, value)  # never overwrite vars already set above
     except Exception:
         console.print(
             "  [yellow]⚠[/yellow]  Could not fetch integration credentials — "
@@ -262,23 +263,61 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
                               f"(referenced in human_approval.notify_url) is not set.")
 
     # Forward SaaS API credentials so the agent can phone home with thread events.
-    # AGENTFILE_RUNNER_TOKEN — issued by the Ninetrix platform (set in .env for local dev).
-    # AGENTFILE_API_URL      — rewritten localhost → host.docker.internal so it resolves
-    #                          correctly from inside the agent container.
-    _runner_token = os.environ.get("AGENTFILE_RUNNER_TOKEN") or _load_dotenv_key("AGENTFILE_RUNNER_TOKEN")
-    if _runner_token:
-        env["AGENTFILE_RUNNER_TOKEN"] = _runner_token
-    _api_url = os.environ.get("AGENTFILE_API_URL") or _load_dotenv_key("AGENTFILE_API_URL")
+    # Resolution order for AGENTFILE_API_URL:
+    #   env var → .env file → ~/.agentfile/config.json → auto-detect local
+    # Resolution order for AGENTFILE_RUNNER_TOKEN:
+    #   machine secret (when local API running — always authoritative for local dev)
+    #   → env var / .env file → auth.json token
+    # NOTE: machine secret takes priority over env/.env because env/.env often holds a
+    # stale SaaS token that the local API won't accept. The machine secret is the only
+    # token guaranteed to work with `ninetrix dev`.
+    from agentfile.core.config import get_api_url as _get_api_url
+    _api_url = (
+        os.environ.get("AGENTFILE_API_URL")
+        or _load_dotenv_key("AGENTFILE_API_URL")
+        or _get_api_url()
+    )
+    if not _api_url and _is_local_api_running():
+        _api_url = "http://localhost:8000"
+
+    _token_source: str | None = None
     if _api_url:
         env["AGENTFILE_API_URL"] = _docker_url(_api_url)
-    elif _is_local_api_running():
-        # Auto-detect: local stack is up (ninetrix dev) — wire the agent to it automatically.
-        env.setdefault("AGENTFILE_API_URL", "http://host.docker.internal:8000")
-        if not env.get("AGENTFILE_RUNNER_TOKEN"):
+
+        # 1. Machine secret — always wins when local API is up (guaranteed to work)
+        if _is_local_api_running():
             _secret = _read_machine_secret()
             if _secret:
                 env["AGENTFILE_RUNNER_TOKEN"] = _secret
-        console.print("  [dim]Local API detected → telemetry will be sent to http://localhost:8000[/dim]\n")
+                _token_source = "machine secret"
+
+        # 2. Explicit env var / .env file — used when not local dev (e.g. remote SaaS)
+        if not env.get("AGENTFILE_RUNNER_TOKEN"):
+            _runner_token = os.environ.get("AGENTFILE_RUNNER_TOKEN") or _load_dotenv_key("AGENTFILE_RUNNER_TOKEN")
+            if _runner_token:
+                env["AGENTFILE_RUNNER_TOKEN"] = _runner_token
+                _token_source = "env / .env"
+
+        # 3. Token saved by `ninetrix auth login` (remote SaaS fallback)
+        if not env.get("AGENTFILE_RUNNER_TOKEN"):
+            from agentfile.core.auth import read_token as _read_token
+            _stored_token = _read_token(_api_url)
+            if _stored_token:
+                env["AGENTFILE_RUNNER_TOKEN"] = _stored_token
+                _token_source = "auth.json"
+
+        if env.get("AGENTFILE_RUNNER_TOKEN"):
+            console.print(
+                f"  [dim]Telemetry → {_api_url}  "
+                f"[green]✓[/green] token: {_token_source}[/dim]\n"
+            )
+        else:
+            console.print(
+                f"  [yellow]⚠[/yellow]  Telemetry → {_api_url}  "
+                f"[yellow]no token[/yellow] — events will not be sent.\n"
+                "  [dim]Run [bold]ninetrix dev[/bold] or "
+                "[bold]ninetrix auth login --token <token>[/bold] to fix.[/dim]\n"
+            )
 
     # MCP Gateway — always forward gateway vars so `ninetrix run --image` works
     # from any directory, even if the local agentfile.yaml doesn't have mcp_gateway:.

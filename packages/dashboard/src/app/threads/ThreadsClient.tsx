@@ -1249,24 +1249,56 @@ function TraceDrawer({
               {thread.trigger && <TriggerChip trigger={thread.trigger} />}
             </div>
 
-            <button
-              onClick={onClose}
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 6,
-                border: "1px solid var(--border-strong)",
-                background: "transparent",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 16,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              ✕
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              {/* Enlarge / full-screen button */}
+              <a
+                href={`/dashboard/threads/observe?id=${thread.thread_id}`}
+                title="Open full observability view"
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-strong)",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  textDecoration: "none",
+                  transition: "background 0.12s, color 0.12s",
+                }}
+                onMouseEnter={(e) => {
+                  (e.currentTarget as HTMLAnchorElement).style.background = "var(--border)";
+                  (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-secondary)";
+                }}
+                onMouseLeave={(e) => {
+                  (e.currentTarget as HTMLAnchorElement).style.background = "transparent";
+                  (e.currentTarget as HTMLAnchorElement).style.color = "var(--text-muted)";
+                }}
+              >
+                ⤢
+              </a>
+              <button
+                onClick={onClose}
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 6,
+                  border: "1px solid var(--border-strong)",
+                  background: "transparent",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 16,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                ✕
+              </button>
+            </div>
           </div>
 
           {/* Row 2: Stats */}

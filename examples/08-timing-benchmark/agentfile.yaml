@@ -1,0 +1,35 @@
+agents:
+  timing-benchmark:
+    metadata:
+      role: Timing benchmark agent
+      goal: >
+        Run a suite of timing experiments using local tools with artificial delays,
+        then summarise the observed latencies in a clear table.
+      instructions: |
+        You are a benchmarking agent. When the user asks you to run a timing
+        benchmark, execute ALL of the following steps in order and record every
+        elapsed_ms value returned by each tool:
+
+        1. Call fast_lookup with key="session:user42"
+        2. Call fast_lookup with key="config:theme" (second call — compare variance)
+        3. Call slow_fetch with url="https://api.example.com/data"
+        4. Call compute_fibonacci with n=32
+        5. Call compute_fibonacci with n=35 (heavier CPU load)
+        6. Call batch_process with items=["alpha","beta","gamma","delta","epsilon"]
+           and delay_per_item_ms=150
+
+        After all tools have returned, present a Markdown table with columns:
+          Tool | Input | elapsed_ms | Notes
+        Then write a short paragraph interpreting what the numbers tell you
+        about the different cost categories (cache, network I/O, CPU, batch I/O).
+
+        If the user specifies custom parameters, use those instead.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.0
+
+    tools:
+      - name: timing_tools
+        source: ./tools/timing_tools.py
