@@ -80,7 +80,7 @@ _SORT_COLS = {
 
 _VALID_STATUSES = {
     "in_progress", "waiting_for_approval", "completed",
-    "error", "approved", "rejected",
+    "error", "approved", "rejected", "budget_exceeded",
 }
 
 

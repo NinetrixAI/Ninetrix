@@ -362,6 +362,23 @@ async def main() -> None:
                         reasoning_hint=_thinking_text or "",
 {% endif %}
                     )
+                except BudgetExceededError as _bex:
+                    print(f"\n[budget] {_bex}", file=sys.stderr, flush=True)
+                    _post_runner_event("thread_budget_exceeded", {
+{% if has_any_triggers or has_invoke_server %}
+                        "thread_id":    run_id or "",
+{% else %}
+                        "thread_id":    THREAD_ID or "",
+{% endif %}
+                        "run_cost_usd": round(_run_cost, 6),
+                        "budget_usd":   MAX_BUDGET_USD,
+                    })
+{% if has_any_triggers or has_invoke_server %}
+                    print("[budget] Run budget exhausted — waiting for next trigger.", file=sys.stderr)
+{% else %}
+                    print("[budget] Budget exhausted — exiting.", file=sys.stderr)
+                    break
+{% endif %}
                 except (KeyboardInterrupt, SystemExit):
                     raise
                 except BaseException as exc:

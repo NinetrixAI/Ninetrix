@@ -105,11 +105,17 @@ async def ingest_events(
                         "turn_start_history_len": turn_start_history_len,
                         "pending_tool_calls":     pending_tool_calls,
                     })
+                    run_cost_usd  = float(data.get("run_cost_usd") or 0)
+                    budget_usd    = float(data.get("budget_usd") or 0)
+                    budget_warning = bool(data.get("budget_warning", False))
                     metadata_json = json.dumps({
-                        "tokens_used":   tokens_used,
-                        "model":         model,
-                        "input_tokens":  input_tokens,
-                        "output_tokens": output_tokens,
+                        "tokens_used":    tokens_used,
+                        "model":          model,
+                        "input_tokens":   input_tokens,
+                        "output_tokens":  output_tokens,
+                        "run_cost_usd":   run_cost_usd,
+                        "budget_usd":     budget_usd,
+                        "budget_warning": budget_warning,
                     })
                     await conn.execute(
                         """
@@ -154,6 +160,45 @@ async def ingest_events(
                         thread_id, new_status, metadata_json,
                     )
                     log.info("thread status | thread=%s → %s", thread_id, new_status)
+
+                elif event.type == "thread_budget_exceeded":
+                    thread_id = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    run_cost_usd = float(data.get("run_cost_usd") or 0)
+                    budget_usd   = float(data.get("budget_usd") or 0)
+                    extra_meta   = json.dumps({
+                        "run_cost_usd":   run_cost_usd,
+                        "budget_usd":     budget_usd,
+                        "budget_warning": True,
+                    })
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET status   = 'budget_exceeded',
+                            metadata = metadata || $2::jsonb
+                        WHERE (thread_id, step_index) = (
+                            SELECT thread_id, step_index
+                            FROM agentfile_checkpoints
+                            WHERE thread_id = $1
+                            ORDER BY step_index DESC
+                            LIMIT 1
+                        )
+                        """,
+                        thread_id, extra_meta,
+                    )
+                    log.info("thread status | thread=%s → budget_exceeded (cost=$%.4f / $%.2f)",
+                             thread_id, run_cost_usd, budget_usd)
+
+                elif event.type == "budget_warning":
+                    # Budget warning events are informational — log them.
+                    # The cost data is already embedded in checkpoint metadata via the checkpoint event.
+                    thread_id = data.get("thread_id", "")
+                    pct_used  = data.get("pct_used", 0)
+                    run_cost  = data.get("run_cost_usd", 0)
+                    budget    = data.get("budget_usd", 0)
+                    log.warning("budget_warning | thread=%s pct=%s%% cost=$%.4f budget=$%.2f",
+                                thread_id, pct_used, run_cost, budget)
 
                 else:
                     # Store unknown events in runner_events for debugging

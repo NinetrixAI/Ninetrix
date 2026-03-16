@@ -31,6 +31,7 @@ async def _verify_step(
         text    = (resp.choices[0].message.content or "").strip()
         in_tok  = getattr(resp.usage, "prompt_tokens", 0) or 0
         out_tok = getattr(resp.usage, "completion_tokens", 0) or 0
+        _charge(_VERIFIER_LITELLM_MODEL, in_tok, out_tok, "verifier")
         # Strip optional markdown fences the model may add
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(text)
@@ -88,6 +89,7 @@ async def _thinking_phase(user_input: str) -> tuple[str | None, int, int]:
         )
         _in_tok  = (getattr(_resp.usage, "prompt_tokens",    0) or 0) if _resp.usage else 0
         _out_tok = (getattr(_resp.usage, "completion_tokens", 0) or 0) if _resp.usage else 0
+        _charge(_THINKING_MODEL, _in_tok, _out_tok, "thinking")
         return (_resp.choices[0].message.content or "").strip() or None, _in_tok, _out_tok
     except asyncio.TimeoutError:
         print(f"[thinking] Warning: thinking step timed out after {_THINKING_TIMEOUT}s — skipping.", file=sys.stderr)
@@ -131,6 +133,9 @@ async def _plan_phase(user_input: str, tool_defs: list) -> dict | None:
         resp = await litellm.acompletion(
             model=LITELLM_MODEL, max_tokens=512, temperature=0.0, messages=_plan_msgs,
         )
+        _plan_in_tok  = (getattr(resp.usage, "prompt_tokens",    0) or 0) if resp.usage else 0
+        _plan_out_tok = (getattr(resp.usage, "completion_tokens", 0) or 0) if resp.usage else 0
+        _charge(LITELLM_MODEL, _plan_in_tok, _plan_out_tok, "plan")
         text = (resp.choices[0].message.content or "").strip()
         text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         # Extract just the JSON object — handles trailing text / explanations after the closing brace

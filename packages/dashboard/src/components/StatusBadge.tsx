@@ -2,11 +2,12 @@
 
 export function normalizeStatus(
   s: string
-): "running" | "completed" | "error" | "pending" | "cancelled" {
+): "running" | "completed" | "error" | "pending" | "cancelled" | "budget" {
   if (s === "in_progress" || s === "started" || s === "running") return "running";
   if (s === "completed" || s === "approved") return "completed";
   if (s === "error" || s === "failed") return "error";
   if (s === "waiting_for_approval" || s === "pending") return "pending";
+  if (s === "budget_exceeded") return "budget";
   return "cancelled";
 }
 
@@ -19,6 +20,7 @@ export const STATUS_STYLES: Record<
   error:     { bg: "rgba(239,68,68,0.1)",   text: "#EF4444", dot: "#EF4444", label: "Failed"    },
   pending:   { bg: "rgba(245,158,11,0.1)",  text: "#F59E0B", dot: "#F59E0B", label: "Pending"   },
   cancelled: { bg: "rgba(100,116,139,0.08)",text: "#64748B", dot: "#475569", label: "Cancelled" },
+  budget:    { bg: "rgba(249,115,22,0.1)",  text: "#FB923C", dot: "#F97316", label: "Budget Exceeded" },
 };
 
 export default function StatusBadge({
