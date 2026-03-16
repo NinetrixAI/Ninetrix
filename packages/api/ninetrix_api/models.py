@@ -68,6 +68,9 @@ class ThreadSummary(BaseModel):
     tokens_used: int     # total across all agents
     model: str
     trigger: str = "api"  # trigger type (not yet stored in local checkpoints)
+    run_cost_usd: float = 0.0
+    budget_usd: float = 0.0
+    budget_soft_warned: bool = False
 
 
 class ThreadDetail(BaseModel):

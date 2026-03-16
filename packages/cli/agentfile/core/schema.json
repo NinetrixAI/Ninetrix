@@ -22,6 +22,11 @@
           "exclusiveMinimum": 0,
           "description": "Maximum spend in USD allowed per run. The agent stops when this limit is reached."
         },
+        "budget_warning_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Soft budget alert threshold in USD. When spend reaches this amount the agent logs a warning and emits an event but does NOT stop. Set without max_budget_per_run for warning-only mode."
+        },
         "human_approval": {
           "type": "object",
           "description": "Pause and require human approval before specific tool calls execute.",
@@ -176,6 +181,7 @@
             "additionalProperties": false,
             "properties": {
               "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0, "description": "Maximum spend in USD for this agent per run." },
+              "budget_warning_usd": { "type": "number", "minimum": 0, "description": "Soft budget alert threshold in USD. Warns but does not stop the agent." },
               "human_approval": {
                 "type": "object",
                 "additionalProperties": false,
@@ -325,6 +331,7 @@
             "additionalProperties": false,
             "properties": {
               "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0, "description": "Maximum spend in USD per run." },
+              "budget_warning_usd": { "type": "number", "minimum": 0, "description": "Soft budget alert threshold in USD." },
               "human_approval": {
                 "type": "object",
                 "additionalProperties": false,
@@ -381,6 +388,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "max_budget_per_run": { "type": "number", "exclusiveMinimum": 0 },
+                    "budget_warning_usd": { "type": "number", "minimum": 0 },
                     "human_approval": {
                       "type": "object",
                       "additionalProperties": false,

@@ -316,11 +316,13 @@ def _model_cost(model_spec: str, in_tok: int, out_tok: int) -> float:
     return (in_tok * prices[0] + out_tok * prices[1]) / 1_000_000
 
 
-MAX_BUDGET_USD: float = {{ agent.governance.max_budget_per_run }}
-_run_cost:      float = 0.0    # accumulated USD cost this run
-_run_in_tok:    int   = 0      # total input tokens consumed this run
-_run_out_tok:   int   = 0      # total output tokens consumed this run
-_budget_warned: bool  = False  # suppress repeated 80%-budget warnings
+MAX_BUDGET_USD:  float = {{ agent.governance.max_budget_per_run }}
+BUDGET_WARN_USD: float = {{ agent.governance.budget_warning_usd }}  # 0 = disabled
+_run_cost:       float = 0.0    # accumulated USD cost this run
+_run_in_tok:     int   = 0      # total input tokens consumed this run
+_run_out_tok:    int   = 0      # total output tokens consumed this run
+_budget_warned:      bool = False  # suppress repeated 80%-of-hard-limit warnings
+_budget_soft_warned: bool = False  # suppress repeated soft-threshold warnings
 
 AGENTFILE_SHOW_COST = os.environ.get("AGENTFILE_SHOW_COST", "").lower() in ("1", "true", "yes")
 
@@ -332,7 +334,7 @@ class BudgetExceededError(RuntimeError):
 
 def _charge(model_spec: str, in_tok: int, out_tok: int, label: str = "") -> None:
     """Accumulate cost from one LLM call. Raises BudgetExceededError when over budget."""
-    global _run_cost, _run_in_tok, _run_out_tok, _budget_warned
+    global _run_cost, _run_in_tok, _run_out_tok, _budget_warned, _budget_soft_warned
     if not (in_tok or out_tok):
         return
     cost = _model_cost(model_spec, in_tok, out_tok)
@@ -358,6 +360,21 @@ def _charge(model_spec: str, in_tok: int, out_tok: int, label: str = "") -> None
             "agent_id":     AGENT_ID,
             "run_cost_usd": round(_run_cost, 6),
             "budget_usd":   MAX_BUDGET_USD,
+            "pct_used":     _pct,
+        })
+    if BUDGET_WARN_USD > 0 and not _budget_soft_warned and _run_cost >= BUDGET_WARN_USD:
+        _budget_soft_warned = True
+        _pct = int(100 * _run_cost / BUDGET_WARN_USD) if BUDGET_WARN_USD else 0
+        print(
+            f"[budget] Alert: ${_run_cost:.4f} spent — warning threshold ${BUDGET_WARN_USD:.4f} reached ({_pct}%)",
+            file=sys.stderr, flush=True,
+        )
+        _post_runner_event("budget_warning", {
+            "thread_id":    THREAD_ID,
+            "trace_id":     TRACE_ID,
+            "agent_id":     AGENT_ID,
+            "run_cost_usd": round(_run_cost, 6),
+            "budget_usd":   BUDGET_WARN_USD,
             "pct_used":     _pct,
         })
     if _run_cost >= MAX_BUDGET_USD:

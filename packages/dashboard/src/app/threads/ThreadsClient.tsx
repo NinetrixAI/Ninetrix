@@ -1196,6 +1196,25 @@ function TraceDrawer({
                 {thread.thread_id}
               </code>
               <StatusBadge status={thread.status} />
+              {thread.budget_soft_warned && thread.status !== "budget_exceeded" && (
+                <span
+                  title={`Budget alert: $${thread.run_cost_usd?.toFixed(4)} spent (warn threshold $${thread.budget_usd?.toFixed(4)})`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
+                    fontSize: 11,
+                    fontWeight: 500,
+                    color: "#FB923C",
+                    background: "rgba(249,115,22,0.1)",
+                    border: "1px solid rgba(249,115,22,0.25)",
+                    borderRadius: 5,
+                    padding: "2px 6px",
+                  }}
+                >
+                  ⚠ Budget Alert
+                </span>
+              )}
               {thread.trigger && <TriggerChip trigger={thread.trigger} />}
             </div>
 

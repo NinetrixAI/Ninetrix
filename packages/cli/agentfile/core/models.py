@@ -113,6 +113,7 @@ class HumanApproval:
 @dataclass
 class Governance:
     max_budget_per_run: float = 1.0
+    budget_warning_usd: float = 0.0  # soft warning threshold — logs + event only, no exit
     human_approval: HumanApproval = field(default_factory=HumanApproval)
     rate_limit: str = "10_requests_per_minute"
 
@@ -248,6 +249,7 @@ def _parse_governance(gov_raw: dict) -> Governance:
     ha_raw = gov_raw.get("human_approval") or {}
     return Governance(
         max_budget_per_run=float(gov_raw.get("max_budget_per_run", 1.0)),
+        budget_warning_usd=float(gov_raw.get("budget_warning_usd", 0.0)),
         human_approval=HumanApproval(
             enabled=ha_raw.get("enabled", True),
             actions=list(ha_raw.get("actions") or []),

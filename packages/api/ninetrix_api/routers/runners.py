@@ -105,17 +105,19 @@ async def ingest_events(
                         "turn_start_history_len": turn_start_history_len,
                         "pending_tool_calls":     pending_tool_calls,
                     })
-                    run_cost_usd  = float(data.get("run_cost_usd") or 0)
-                    budget_usd    = float(data.get("budget_usd") or 0)
-                    budget_warning = bool(data.get("budget_warning", False))
+                    run_cost_usd      = float(data.get("run_cost_usd") or 0)
+                    budget_usd        = float(data.get("budget_usd") or 0)
+                    budget_warning    = bool(data.get("budget_warning", False))
+                    budget_soft_warned = bool(data.get("budget_soft_warned", False))
                     metadata_json = json.dumps({
-                        "tokens_used":    tokens_used,
-                        "model":          model,
-                        "input_tokens":   input_tokens,
-                        "output_tokens":  output_tokens,
-                        "run_cost_usd":   run_cost_usd,
-                        "budget_usd":     budget_usd,
-                        "budget_warning": budget_warning,
+                        "tokens_used":       tokens_used,
+                        "model":             model,
+                        "input_tokens":      input_tokens,
+                        "output_tokens":     output_tokens,
+                        "run_cost_usd":      run_cost_usd,
+                        "budget_usd":        budget_usd,
+                        "budget_warning":    budget_warning,
+                        "budget_soft_warned": budget_soft_warned,
                     })
                     await conn.execute(
                         """

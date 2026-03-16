@@ -19,6 +19,9 @@ export interface ThreadSummary {
   tokens_used: number;
   model: string;
   trigger: string;
+  run_cost_usd: number;
+  budget_usd: number;
+  budget_soft_warned: boolean;
 }
 
 export interface TimelineEvent {

@@ -101,6 +101,7 @@ class _SaaSCheckpointer:
             "run_cost_usd":           round(_run_cost, 6),
             "budget_usd":             MAX_BUDGET_USD,
             "budget_warning":         _run_cost >= MAX_BUDGET_USD * 0.8,
+            "budget_soft_warned":     _budget_soft_warned,
         })
         self.step_index += 1
 
