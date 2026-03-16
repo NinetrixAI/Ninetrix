@@ -282,6 +282,143 @@ def _trim_messages(messages: list) -> list:
     return _result
 
 
+# ── Budget & rate-limit enforcement ──────────────────────────────────────────
+# Review model prices quarterly — see provider pricing pages for updates.
+_MODEL_PRICES: dict[str, tuple[float, float]] = {
+    "claude-opus-4-6":         (15.00, 75.00),
+    "claude-sonnet-4-6":       ( 3.00, 15.00),
+    "claude-haiku-4-5":        ( 0.25,  1.25),
+    "claude-3-5-sonnet":       ( 3.00, 15.00),
+    "claude-3-5-haiku":        ( 0.80,  4.00),
+    "claude-3-opus":           (15.00, 75.00),
+    "gpt-4o":                  ( 5.00, 15.00),
+    "gpt-4o-mini":             ( 0.15,  0.60),
+    "gpt-4-turbo":             (10.00, 30.00),
+    "gpt-3.5-turbo":           ( 0.50,  1.50),
+    "gemini-1.5-pro":          ( 1.25,  5.00),
+    "gemini-1.5-flash":        ( 0.075, 0.30),
+    "gemini-2.0-flash":        ( 0.10,  0.40),
+    "llama-3.3-70b-versatile": ( 0.59,  0.79),
+    "llama-3.1-8b-instant":    ( 0.05,  0.08),
+    "mistral-large-latest":    ( 3.00,  9.00),
+    "mistral-small-latest":    ( 0.20,  0.60),
+}
+_PRICE_FALLBACK = (1.00, 3.00)  # conservative fallback for unknown models
+
+
+def _model_cost(model_spec: str, in_tok: int, out_tok: int) -> float:
+    """Return USD cost for one LLM call. Handles 'provider/model' or bare model name."""
+    name = model_spec.split("/", 1)[-1] if "/" in model_spec else model_spec
+    prices = _MODEL_PRICES.get(name)
+    if prices is None:
+        best = max((k for k in _MODEL_PRICES if name.startswith(k)), key=len, default=None)
+        prices = _MODEL_PRICES[best] if best else _PRICE_FALLBACK
+    return (in_tok * prices[0] + out_tok * prices[1]) / 1_000_000
+
+
+MAX_BUDGET_USD: float = {{ agent.governance.max_budget_per_run }}
+_run_cost:      float = 0.0    # accumulated USD cost this run
+_run_in_tok:    int   = 0      # total input tokens consumed this run
+_run_out_tok:   int   = 0      # total output tokens consumed this run
+_budget_warned: bool  = False  # suppress repeated 80%-budget warnings
+
+AGENTFILE_SHOW_COST = os.environ.get("AGENTFILE_SHOW_COST", "").lower() in ("1", "true", "yes")
+
+
+class BudgetExceededError(RuntimeError):
+    """Raised when the agent exhausts its USD budget for this run."""
+    pass
+
+
+def _charge(model_spec: str, in_tok: int, out_tok: int, label: str = "") -> None:
+    """Accumulate cost from one LLM call. Raises BudgetExceededError when over budget."""
+    global _run_cost, _run_in_tok, _run_out_tok, _budget_warned
+    if not (in_tok or out_tok):
+        return
+    cost = _model_cost(model_spec, in_tok, out_tok)
+    _run_cost    += cost
+    _run_in_tok  += in_tok
+    _run_out_tok += out_tok
+    if AGENTFILE_SHOW_COST:
+        _tag = f" [{label}]" if label else ""
+        print(
+            f"[cost]{_tag} ${cost:.4f} | total: ${_run_cost:.4f} / ${MAX_BUDGET_USD:.2f}",
+            flush=True,
+        )
+    if not _budget_warned and _run_cost >= MAX_BUDGET_USD * 0.8:
+        _budget_warned = True
+        _pct = int(100 * _run_cost / MAX_BUDGET_USD)
+        print(
+            f"[budget] Warning: {_pct}% used (${_run_cost:.4f} / ${MAX_BUDGET_USD:.2f})",
+            file=sys.stderr, flush=True,
+        )
+        _post_runner_event("budget_warning", {
+            "thread_id":    THREAD_ID,
+            "trace_id":     TRACE_ID,
+            "agent_id":     AGENT_ID,
+            "run_cost_usd": round(_run_cost, 6),
+            "budget_usd":   MAX_BUDGET_USD,
+            "pct_used":     _pct,
+        })
+    if _run_cost >= MAX_BUDGET_USD:
+        raise BudgetExceededError(
+            f"Run budget exhausted: ${_run_cost:.4f} >= ${MAX_BUDGET_USD:.2f} "
+            f"({_run_in_tok} in + {_run_out_tok} out tokens)"
+        )
+
+
+def _parse_rate_limit(s: str) -> tuple[int, float]:
+    """Parse governance.rate_limit string.
+
+    Formats: N_requests_per_minute, N_requests_per_second, N_rpm, N_rps.
+    Returns (max_requests, period_seconds). Returns (0, 0.0) when disabled.
+    """
+    import re as _re
+    s = (s or "").strip().lower()
+    if not s or s in ("0", "disabled", "none", "unlimited"):
+        return 0, 0.0
+    _m = _re.match(r"(\d+)(?:_requests)?_per_(minute|second|min|sec|s|m)\b", s)
+    if not _m:
+        _m = _re.match(r"(\d+)_r(pm|ps)\b", s)
+    if not _m:
+        print(
+            f"[rate-limit] Warning: unrecognised format {s!r} — rate limiting disabled.",
+            file=sys.stderr,
+        )
+        return 0, 0.0
+    n    = int(_m.group(1))
+    unit = _m.group(2)
+    period = 1.0 if unit in ("second", "sec", "s", "ps") else 60.0
+    return n, period
+
+
+_RATE_MAX, _RATE_PERIOD = _parse_rate_limit("{{ agent.governance.rate_limit }}")
+_rate_bucket:    float = float(_RATE_MAX)
+_rate_refill_at: float = 0.0
+
+
+async def _rate_limit_wait() -> None:
+    """Consume one rate-limit token; sleep if the bucket is empty."""
+    global _rate_bucket, _rate_refill_at
+    if _RATE_MAX <= 0:
+        return
+    _now = time.monotonic()
+    _elapsed = _now - _rate_refill_at
+    _refill = _elapsed * (_RATE_MAX / _RATE_PERIOD)
+    _rate_bucket = min(float(_RATE_MAX), _rate_bucket + _refill)
+    _rate_refill_at = _now
+    if _rate_bucket >= 1.0:
+        _rate_bucket -= 1.0
+        return
+    _wait = (1.0 - _rate_bucket) * (_RATE_PERIOD / _RATE_MAX)
+    print(
+        f"[rate-limit] Throttling — waiting {_wait:.1f}s "
+        f"(limit: {_RATE_MAX} req/{_RATE_PERIOD:.0f}s)",
+        file=sys.stderr, flush=True,
+    )
+    await asyncio.sleep(_wait)
+    _rate_bucket = 0.0
+    _rate_refill_at = time.monotonic()
 
 
 {% include 'includes/_persistence.py.j2' %}

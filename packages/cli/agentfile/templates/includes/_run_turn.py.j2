@@ -40,6 +40,7 @@ async def _run_turn(
 {% endif %}
     _scp_in = _scp_out = 0  # per-turn token counts for saas_cp telemetry
     for _turn in range(MAX_TURNS):
+        await _rate_limit_wait()
         response = await litellm.acompletion(
             model=LITELLM_MODEL,
             messages=_trim_messages(messages),
@@ -51,12 +52,12 @@ async def _run_turn(
 
         choice = response.choices[0]
         msg    = choice.message
-        if saas_cp is not None and response.usage:
-            _scp_in  = (getattr(response.usage, "prompt_tokens",    0) or 0)
-            _scp_out = (getattr(response.usage, "completion_tokens", 0) or 0)
+        # Always extract token counts — needed for both telemetry and budget enforcement.
+        _scp_in  = (getattr(response.usage, "prompt_tokens",    0) or 0) if response.usage else 0
+        _scp_out = (getattr(response.usage, "completion_tokens", 0) or 0) if response.usage else 0
+        if saas_cp is not None:
             saas_cp.tokens_used += _scp_in + _scp_out
-        else:
-            _scp_in = _scp_out = 0
+        _charge(LITELLM_MODEL, _scp_in, _scp_out)  # raises BudgetExceededError if over budget
 
         _assistant_msg: dict = {
             "role": "assistant",

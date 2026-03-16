@@ -98,6 +98,9 @@ class _SaaSCheckpointer:
             "model":                  LITELLM_MODEL,
             "turn_start_history_len": self.turn_start_history_len,
             "pending_tool_calls":     self.pending_tool_calls,
+            "run_cost_usd":           round(_run_cost, 6),
+            "budget_usd":             MAX_BUDGET_USD,
+            "budget_warning":         _run_cost >= MAX_BUDGET_USD * 0.8,
         })
         self.step_index += 1
 
