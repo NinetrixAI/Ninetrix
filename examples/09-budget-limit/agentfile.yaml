@@ -1,0 +1,37 @@
+governance:
+  max_budget_per_run: 0.005          # hard cap — agent exits when this is reached
+  budget_warning_usd: 0.003          # soft warning logged + event fired at 60% of cap
+
+agents:
+  budget-demo:
+    metadata:
+      role: Token-hungry summariser
+      goal: >
+        Repeatedly summarise progressively longer texts to burn tokens and
+        demonstrate the max_budget_per_run guard.
+      instructions: |
+        You are a summarisation agent used to demonstrate budget enforcement.
+
+        When the user sends "run", execute the following steps in order:
+
+        1. Call generate_text with length="short"   → summarise the returned text in 2 sentences.
+        2. Call generate_text with length="medium"  → summarise in 3 sentences.
+        3. Call generate_text with length="long"    → summarise in 5 sentences.
+        4. Call generate_text with length="very_long" → summarise as a structured bullet list.
+        5. Call generate_text with length="very_long" a second time → produce a detailed
+           analysis comparing the themes in this text with the previous one.
+
+        After each step, print: "Step N complete. Estimated spend so far: [your rough estimate]."
+
+        NOTE: The run budget is intentionally very small ($0.005). The agent will
+        be stopped automatically before all steps complete — that is expected and
+        is exactly what this example is demonstrating.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.3
+
+    tools:
+      - name: budget_tools
+        source: ./tools/budget_tools.py
