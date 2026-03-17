@@ -37,16 +37,11 @@ The `${VAR}` syntax is resolved at boot from the container's environment. Creden
 
 ### SaaS Mode (prod)
 When `MCP_SAAS_API_URL` + `MCP_GATEWAY_TOKEN` are both set:
-- Servers in `mcp-worker.yaml` that are **known managed integrations** (see `_MANAGED_PACKAGES` in `runtime.py`) start **eagerly at boot** using vault credentials — `start_static_servers()` calls `_start_managed_server()` instead of `_start_server_from_config()` for these. This ensures their tools are registered with the gateway immediately so agents can discover them via `tools/list`.
-- Unknown or custom servers (not in `_MANAGED_PACKAGES`) still start from their yaml `env:` block as in dev mode.
-- `_start_managed_server()` calls `saas-api /internal/v1/gateway/tool-credential` with the worker token to fetch the real credential, then merges it with `os.environ` (preserving `PATH`, `HOME`, etc.) before spawning the subprocess.
+- Servers in `mcp-worker.yaml` that are **known managed integrations** start **eagerly at boot** using vault credentials — `start_static_servers()` calls `_start_managed_server()` for these entries. This ensures their tools are registered with the gateway immediately so agents can discover them via `tools/list`.
+- Unknown or custom servers (not in the managed set) still start from their yaml `env:` block as in dev mode.
+- `_start_managed_server()` calls `GET /v1/integrations/credentials` on the saas-api (Bearer-auth) to fetch credentials, then merges them with `os.environ` (preserving `PATH`, `HOME`, etc.) before spawning the subprocess.
 - Credentials are never stored in worker memory beyond the subprocess spawn.
 - Google token expiry (401) on a tool call triggers an automatic `refresh_credential()` + subprocess restart.
-
-**Managed integrations** (`_MANAGED_PACKAGES` in `runtime.py`):
-`github`, `slack`, `notion`, `google-drive`, `google-sheets`, `google-docs`, `tavily`, `brave-search`, `filesystem`
-
-> Add new integrations here when they are added to `saas-api/_CRED_ENV_MAP` and `mcp_catalog`.
 
 ## File Structure
 
@@ -68,16 +63,19 @@ gateway_client.py GatewayClient — persistent WebSocket to the gateway:
                    Reconnects with exponential back-off (5s → 60s cap) on disconnect
 runtime.py       ServerPool — manages all MCPServer instances:
                    start_static_servers() — eager start at boot; uses _start_managed_server for
-                                            entries in _MANAGED_PACKAGES when is_saas_mode() is true
-                   get_server(name)       — returns running server or starts lazily (for non-yaml servers)
+                                            known managed entries when is_saas_mode() is true
+                   get_server(name)       — returns running server or starts lazily
                    call_tool(...)         — executes tool, handles Google 401 refresh
-                   _start_managed_server() — fetches creds from saas-api vault, merges with os.environ,
-                                             starts subprocess; used both at boot and on lazy call
+                   _start_managed_server() — fetches creds from saas-api vault, merges with
+                                             os.environ, starts subprocess
                    _restart_server()      — stops + restarts with refreshed credentials
                    _MANAGED_PACKAGES      — dict of server_name → npx_package for known integrations
 saas_client.py   HTTP client for worker → saas-api credential fetching (SaaS mode only):
                    get_tool_credential(integration_id) → env_vars dict
+                     Calls GET /v1/integrations/credentials with Authorization: Bearer
+                     Returns only the entry for the requested integration_id
                    refresh_credential(integration_id) → re-fetches after Google token refresh
+                     Calls POST /internal/v1/runners/credentials/refresh then re-fetches
                    is_saas_mode()         — returns True only when SAAS_API_URL + TOKEN are set
 mcp-worker.yaml.example  Reference config with examples for all supported server types
 ```
@@ -163,13 +161,13 @@ ws://gateway:8080/ws/workers/{worker_id}?token=...&workspace_id=...&worker_name=
 1. start_static_servers() iterates mcp-worker.yaml servers
 2. For each server in _MANAGED_PACKAGES → _start_managed_server(name)
 3. saas_client.get_tool_credential(name)
-   POST saas-api/internal/v1/gateway/tool-credential
-   headers: X-Gateway-Secret: <MCP_GATEWAY_SERVICE_SECRET>
-   body:    { worker_token: "nxt_...", integration_id: "tavily" }
-4. saas-api validates token → returns { "TAVILY_API_KEY": "tvly-abc123" }
+   GET saas-api/v1/integrations/credentials
+   headers: Authorization: Bearer <MCP_GATEWAY_TOKEN>
+4. saas-api returns { "github": {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_..."}, ... }
+   Worker extracts entry for the requested integration_id
 5. env = {**os.environ, **creds}  ← merges with full process env (preserves PATH etc.)
-6. Worker spawns: npx -y tavily-mcp  with env
-7. list_tools() → registers "tavily__search", etc.
+6. Worker spawns: npx -y @modelcontextprotocol/server-github  with env
+7. list_tools() → registers "github__create_issue", etc.
 8. gateway_client.set_tools(eager_tools) → sends worker.register to gateway
    → agents can now discover tools via tools/list
 ```
@@ -185,7 +183,9 @@ ws://gateway:8080/ws/workers/{worker_id}?token=...&workspace_id=...&worker_name=
 
 ### On Google 401
 ```
-saas_client.refresh_credential() → re-fetches from vault (which calls Google /token internally)
+saas_client.refresh_credential(integration_id)
+  → POST saas-api/internal/v1/runners/credentials/refresh  (Bearer auth)
+  → re-fetches via GET /v1/integrations/credentials
 → _restart_server() stops old subprocess, starts fresh one with new access_token
 ```
 
@@ -201,10 +201,9 @@ Credentials are **never stored** beyond the subprocess spawn. The worker process
 | `MCP_WORKSPACE_ID` | `default` | Workspace this worker belongs to |
 | `MCP_WORKER_NAME` | `worker-1` | Human-readable worker name |
 | `MCP_WORKER_ID` | `{worker_name}` | Unique worker identifier |
-| `MCP_GATEWAY_TOKEN` | `dev-secret` | Auth token for gateway connection |
+| `MCP_GATEWAY_TOKEN` | `dev-secret` | Auth token for gateway connection and saas-api Bearer auth |
 | `MCP_WORKER_CONFIG` | `mcp-worker.yaml` | Path to yaml config file |
 | `MCP_SAAS_API_URL` | `` | Enables SaaS mode; saas-api URL for credential fetching |
-| `MCP_GATEWAY_SERVICE_SECRET` | `dev-gateway-secret` | Shared secret for worker → saas-api internal calls |
 
 Credential env vars (forwarded automatically by `ninetrix gateway start`):
 `GITHUB_TOKEN`, `SLACK_BOT_TOKEN`, `SLACK_TEAM_ID`, `NOTION_API_KEY`, `LINEAR_API_KEY`, `BRAVE_API_KEY`, `STRIPE_SECRET_KEY`, `GOOGLE_*_ACCESS_TOKEN`, `POSTGRES_CONNECTION_STRING`
@@ -228,7 +227,7 @@ python main.py
 ## Key Invariants
 
 - **Outbound only** — workers connect to the gateway; the gateway never connects to workers.
-- **Credential isolation** — in SaaS mode, credentials are fetched per-integration, passed to the subprocess env, and not retained in worker memory.
+- **Credential isolation** — in SaaS mode, credentials are fetched per-integration via `GET /v1/integrations/credentials` (Bearer-auth), passed to the subprocess env, and not retained in worker memory.
 - **Managed servers start eagerly in SaaS mode** — tools must be registered with the gateway at boot so agents can discover them via `tools/list`. Lazy startup on first tool call is only a fallback for servers not in `mcp-worker.yaml`.
 - **One bad server cannot crash the worker** — `_start_server_from_config` and `_start_managed_server` catch all exceptions; `mcp_bridge.start()` calls `stop()` on failure to prevent leaked anyio context managers from corrupting the async event loop.
 - **Tool prefix is stable** — `{server_name}__` prefix is set at `MCPServer.start()` and never changes. Renaming a server in yaml changes all its tool names.
