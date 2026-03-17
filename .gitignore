@@ -27,7 +27,7 @@ out/
 CLAUDE.md
 
 # Static build output (generated at build time — not committed)
-packages/api/static/dashboard/
+packages/api/static/
 
 # macOS
 .DS_Store
