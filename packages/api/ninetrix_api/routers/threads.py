@@ -5,7 +5,8 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from ninetrix_api import db
 from ninetrix_api.models import AgentSummary, LogEntry, Page, ThreadDetail, ThreadSummary, TimelineEvent
@@ -514,6 +515,109 @@ async def get_timeline(thread_id: str):
         agent_prev_meta[row["agent_id"]] = prev_meta
 
     return events
+
+
+_TERMINAL_STATUSES = {"completed", "error", "budget_exceeded", "rejected", "interrupted"}
+
+
+@router.get("/{thread_id}/stream")
+async def stream_thread(thread_id: str, request: Request):
+    """SSE stream that emits new timeline events as checkpoints arrive (polls DB every 1s).
+
+    Event format:
+      data: {"type": "update", "thread_id": "...", "status": "...", "step_index": N, "events": [...]}
+
+    Terminal event:
+      event: done
+      data: {}
+    """
+    async def generate():
+        exists = await db.pool().fetchrow(
+            "SELECT 1 FROM agentfile_checkpoints WHERE thread_id = $1 LIMIT 1",
+            thread_id,
+        )
+        if exists is None:
+            yield f"event: error\ndata: {json.dumps({'detail': 'Thread not found'})}\n\n"
+            return
+
+        agent_prev_len: dict[str, int] = {}
+        agent_prev_meta: dict[str, dict] = {}
+        last_status: str | None = None
+
+        q = """
+            SELECT agent_id, trace_id, parent_trace_id, step_index,
+                   timestamp, checkpoint, status
+            FROM agentfile_checkpoints
+            WHERE thread_id = $1
+            ORDER BY timestamp ASC, step_index ASC
+        """
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            rows = await db.pool().fetch(q, thread_id)
+
+            # Build tool_call_id → name map from full history (needed for OpenAI format)
+            full_tool_id_name: dict[str, str] = {}
+            for row in rows:
+                snap = json.loads(row["checkpoint"]) if isinstance(row["checkpoint"], str) else dict(row["checkpoint"])
+                for m in snap.get("history", []):
+                    if m.get("role") == "assistant":
+                        for tc in (m.get("tool_calls") or []):
+                            tc_id = tc.get("id", "")
+                            fn_name = (tc.get("function") or {}).get("name", "")
+                            if tc_id and fn_name:
+                                full_tool_id_name[tc_id] = fn_name
+
+            new_events: list[dict] = []
+            current_status: str | None = None
+
+            for row in rows:
+                current_status = row["status"]
+                snap = json.loads(row["checkpoint"]) if isinstance(row["checkpoint"], str) else dict(row["checkpoint"])
+                history = snap.get("history", [])
+                raw_meta = snap.get("history_meta") or []
+                history_meta = raw_meta + [{}] * max(0, len(history) - len(raw_meta))
+
+                prev = agent_prev_len.get(row["agent_id"], 0)
+                new_msgs = history[prev:]
+                new_meta = history_meta[prev:]
+                agent_prev_len[row["agent_id"]] = len(history)
+
+                prev_meta = agent_prev_meta.get(row["agent_id"], {})
+                for msg, meta in zip(new_msgs, new_meta):
+                    new_events.extend(_msg_to_events(msg, row, meta, prev_meta, full_tool_id_name))
+                    if meta.get("ts"):
+                        prev_meta = meta
+                agent_prev_meta[row["agent_id"]] = prev_meta
+
+            if new_events or current_status != last_status:
+                payload = json.dumps({
+                    "type": "update",
+                    "thread_id": thread_id,
+                    "status": current_status,
+                    "step_index": rows[-1]["step_index"] if rows else 0,
+                    "events": new_events,
+                })
+                yield f"data: {payload}\n\n"
+                last_status = current_status
+
+            if current_status in _TERMINAL_STATUSES:
+                yield "event: done\ndata: {}\n\n"
+                break
+
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/{thread_id}/agents", response_model=list[AgentSummary])
