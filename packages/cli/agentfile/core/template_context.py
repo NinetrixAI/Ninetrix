@@ -3,9 +3,6 @@
 Used by both:
   - cli/agentfile/commands/build.py  (CLI docker build)
   - runner/runner.py                 (SaaS runner boot)
-
-When copied into runner/core/ by build.sh, the try/except import resolves
-the correct mcp_registry location automatically.
 """
 
 from __future__ import annotations
@@ -25,10 +22,6 @@ if _PYDANTIC_AVAILABLE:
         model_config = ConfigDict(arbitrary_types_allowed=True)
 
         agent: Any
-        needs_node: bool = False
-        needs_uv: bool = False
-        has_mcp_tools: bool = False
-        mcp_tool_defs: list = []
         has_composio_tools: bool = False
         composio_tool_defs: list = []
         has_planned_execution: bool = False
@@ -124,11 +117,6 @@ def build_context(
         # MCP_GATEWAY_WORKSPACE) at runtime.
         use_mcp_gateway = True
 
-    needs_node    = False
-    needs_uv      = False
-    has_mcp_tools = False
-    mcp_tool_defs: list[dict] = []
-
     composio_tool_defs = [
         {"app": t.composio_app, "actions": t.actions}
         for t in agent.tools if t.is_composio()
@@ -202,10 +190,6 @@ def build_context(
 
     result = {
         "agent":                      agent,
-        "needs_node":                 needs_node,
-        "needs_uv":                   needs_uv,
-        "has_mcp_tools":              has_mcp_tools,
-        "mcp_tool_defs":              mcp_tool_defs,
         "has_composio_tools":         has_composio_tools,
         "composio_tool_defs":         composio_tool_defs,
         "has_planned_execution":      exec_obj.mode == "planned",

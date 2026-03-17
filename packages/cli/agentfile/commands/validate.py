@@ -96,15 +96,15 @@ def _check_agents(af) -> list[dict]:
             results.append(_r("warn", prefix, f"Unknown provider '{agent_def.provider}' — no API key check"))
 
         # MCP tools
-        from agentfile.core.mcp_registry import resolve
+        from agentfile.core.mcp_catalog import get as _mcp_catalog_get
         for tool in agent_def.tools:
             if tool.is_mcp():
-                sdef = resolve(tool.mcp_name)
-                if sdef is None:
+                entry = _mcp_catalog_get(tool.mcp_name)
+                if entry is None:
                     results.append(_r("warn", prefix,
-                        f"MCP tool '{tool.mcp_name}' not in registry — run: ninetrix mcp add {tool.mcp_name}"))
+                        f"MCP tool '{tool.mcp_name}' not in catalog — run: ninetrix mcp add {tool.mcp_name}"))
                 else:
-                    results.append(_r("ok", prefix, f"MCP tool '{tool.mcp_name}' → {sdef.type}:{sdef.package}"))
+                    results.append(_r("ok", prefix, f"MCP tool '{tool.mcp_name}' → {entry.type}:{entry.package}"))
             elif tool.is_composio():
                 results.append(_r("ok", prefix, f"Composio tool '{tool.composio_app}'" +
                     (f" (actions: {', '.join(tool.actions)})" if tool.actions else "")))
