@@ -75,14 +75,16 @@ class ServerPool:
         if server_name in self._servers:
             return self._servers[server_name]
 
-        # Try static config first (from yaml)
+        # In SaaS mode, managed integrations always use vault credentials — even on
+        # lazy restart (e.g. after a crash). Check this BEFORE static config so that
+        # a yaml env block with ${UNRESOLVED_VAR} never shadows the real credential.
+        if saas_client.is_saas_mode() and server_name in _MANAGED_PACKAGES:
+            return await self._start_managed_server(server_name)
+
+        # Dev/enterprise mode: start from yaml config
         if server_name in self._static_configs:
             srv = await self._start_server_from_config(self._static_configs[server_name])
             return srv
-
-        # Try managed / SaaS credential injection
-        if saas_client.is_saas_mode() and server_name in _MANAGED_PACKAGES:
-            return await self._start_managed_server(server_name)
 
         return None
 
@@ -141,11 +143,17 @@ class ServerPool:
 
     async def _start_managed_server(self, server_name: str) -> Optional[MCPServer]:
         """Fetch credentials from saas-api and start the MCP server subprocess."""
-        log.info("Lazy-starting managed server '%s' — fetching credentials…", server_name)
+        log.info("Starting managed server '%s' — fetching credentials from vault…", server_name)
         creds = await saas_client.get_tool_credential(server_name)
         if not creds:
-            log.warning("No credentials for '%s' — cannot start server", server_name)
+            log.warning(
+                "No credentials for '%s' — integration may not be connected. "
+                "Run: ninetrix mcp connect %s",
+                server_name, server_name,
+            )
             return None
+        # Log which env vars were fetched (never log values)
+        log.info("Fetched credential vars for '%s': %s", server_name, list(creds.keys()))
 
         package = _MANAGED_PACKAGES[server_name]
         # Merge fetched creds with current process env so PATH/NODE_PATH are inherited

@@ -7,9 +7,10 @@ In dev/enterprise mode (no MCP_SAAS_API_URL):
   - All servers in mcp-worker.yaml start eagerly with their static env blocks.
 
 In SaaS mode (MCP_SAAS_API_URL + MCP_GATEWAY_TOKEN set):
-  - Static yaml servers start eagerly as before.
-  - Integration servers (github, slack, google-drive, etc.) start lazily
-    on first tool call, with credentials fetched per-integration from saas-api.
+  - Known managed integrations (github, slack, tavily, etc.) start eagerly at boot
+    with credentials fetched from the saas-api vault — tools are registered with the
+    gateway immediately so agents can discover them via tools/list.
+  - Unknown/custom servers still start from their yaml env blocks as in dev mode.
 """
 from __future__ import annotations
 
