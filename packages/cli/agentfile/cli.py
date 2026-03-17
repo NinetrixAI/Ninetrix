@@ -29,6 +29,7 @@ from agentfile.commands.config import config_cmd
 from agentfile.commands.compose import compose_cmd
 from agentfile.commands.gateway import gateway_cmd
 from agentfile.commands.dev import dev_command
+from agentfile.commands.env import env_cmd
 
 console = Console()
 
@@ -65,6 +66,7 @@ def cli() -> None:
       ninetrix trace         visualize a multi-agent run
       ninetrix restart       rebuild and restart one agent
       ninetrix rollback      switch one agent to a previous image tag
+      ninetrix env           set or list env vars in running containers
       ninetrix down          stop the warm pool
 
     \b
@@ -112,6 +114,7 @@ cli.add_command(config_cmd,   name="config")
 cli.add_command(compose_cmd,  name="compose")
 cli.add_command(gateway_cmd,  name="gateway")
 cli.add_command(dev_command,   name="dev")
+cli.add_command(env_cmd,       name="env")
 
 
 def main() -> None:
