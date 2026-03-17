@@ -1125,8 +1125,8 @@ function TraceDrawer({
     setSelectedNode(null);
     fetchTimeline();
 
-    // Stream live updates if running
-    if (normalizeStatus(thread.status) === "running") {
+    // Stream live updates if running or idle (container still alive, waiting for next message)
+    if (normalizeStatus(thread.status) === "running" || normalizeStatus(thread.status) === "idle") {
       // Reset accumulator so first SSE batch replaces rather than duplicates
       accEventsRef.current = [];
       const cleanup = subscribeThreadStream(
@@ -1153,7 +1153,8 @@ function TraceDrawer({
   }, [thread.thread_id, fetchTimeline, thread.status]);
 
   // Watch for status changes when not streaming (handles thread resuming after completion)
-  const isRunning = normalizeStatus(thread.status) === "running";
+  // Idle means container is alive — SSE covers it, no polling needed.
+  const isRunning = normalizeStatus(thread.status) === "running" || normalizeStatus(thread.status) === "idle";
   useEffect(() => {
     if (isRunning) return;
     const iv = setInterval(async () => {
@@ -1891,6 +1892,7 @@ function ThreadsTable({
 const STATUS_FILTERS = [
   { key: "", label: "All" },
   { key: "running", label: "Running" },
+  { key: "idle", label: "Idle" },
   { key: "completed", label: "Completed" },
   { key: "error", label: "Failed" },
   { key: "pending", label: "Pending" },

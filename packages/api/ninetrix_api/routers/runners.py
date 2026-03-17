@@ -138,11 +138,16 @@ async def ingest_events(
                     log.info("checkpoint | thread=%s step=%d status=%s tokens=%d",
                              thread_id, step_index, status, tokens_used)
 
-                elif event.type in ("thread_completed", "thread_error"):
+                elif event.type in ("thread_completed", "thread_error", "thread_idle"):
                     thread_id   = data.get("thread_id", "")
                     if not thread_id:
                         continue
-                    new_status    = "completed" if event.type == "thread_completed" else "error"
+                    if event.type == "thread_completed":
+                        new_status = "completed"
+                    elif event.type == "thread_idle":
+                        new_status = "idle"
+                    else:
+                        new_status = "error"
                     tokens_used   = int(data.get("tokens_used", 0) or 0)
                     model         = data.get("model", "")
                     metadata_json = json.dumps({"tokens_used": tokens_used, "model": model})

@@ -1153,6 +1153,8 @@ export default function ObservabilityClient() {
   const accEventsRef = useRef<TimelineEvent[]>([]);
 
   const isRunning = thread ? normalizeStatus(thread.status) === "running" : false;
+  // isLive: container is alive and accepting messages (running or idle)
+  const isLive = thread ? (normalizeStatus(thread.status) === "running" || normalizeStatus(thread.status) === "idle") : false;
 
   // Fetch full timeline (used for initial load and fallback refresh)
   const fetchTimeline = useCallback(async (currentThread: ThreadSummary) => {
@@ -1190,9 +1192,9 @@ export default function ObservabilityClient() {
     return () => { cancelled = true; };
   }, [threadId, fetchTimeline]);
 
-  // Stream live updates via SSE when thread is running
+  // Stream live updates via SSE when container is alive (running or idle)
   useEffect(() => {
-    if (!thread || !isRunning) return;
+    if (!thread || !isLive) return;
 
     // Reset accumulator so first SSE batch replaces rather than duplicates
     // (server always starts from step 0, so first tick re-sends all existing events)
@@ -1233,11 +1235,11 @@ export default function ObservabilityClient() {
       cleanup();
       sseRef.current = null;
     };
-  }, [thread?.thread_id, isRunning, fetchTimeline]);
+  }, [thread?.thread_id, isLive, fetchTimeline]);
 
   // Watch for status changes when not streaming (handles thread resuming after completion)
   useEffect(() => {
-    if (!thread || isRunning) return;
+    if (!thread || isLive) return;
     const iv = setInterval(async () => {
       try {
         const { items } = await listThreads({ limit: 200 });
@@ -1251,7 +1253,7 @@ export default function ObservabilityClient() {
       } catch { /* silent */ }
     }, 3000);
     return () => clearInterval(iv);
-  }, [thread?.thread_id, thread?.status, isRunning, fetchTimeline]);
+  }, [thread?.thread_id, thread?.status, isLive, fetchTimeline]);
 
   // Live timer update
   useEffect(() => {
@@ -1342,7 +1344,7 @@ export default function ObservabilityClient() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh", background: "var(--bg-base)" }}>
-      <ObservabilityNav thread={thread} apiStatus={apiStatus} isLive={isRunning} />
+      <ObservabilityNav thread={thread} apiStatus={apiStatus} isLive={isLive} />
 
       <main style={{ paddingTop: 48, flex: 1 }}>
 

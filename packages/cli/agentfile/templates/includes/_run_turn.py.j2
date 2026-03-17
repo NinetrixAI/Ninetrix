@@ -97,7 +97,7 @@ async def _run_turn(
                     continue
 {% endif %}
             if saas_cp is not None:
-                saas_cp.step(messages, "completed", in_tok=_scp_in, out_tok=_scp_out)
+                saas_cp.step(messages, "idle", in_tok=_scp_in, out_tok=_scp_out)
             if messages_out is not None:
                 messages_out[:] = [m for m in messages if m.get("role") != "system"]
             return
@@ -248,7 +248,7 @@ async def _run_turn(
             if result_collector is None:
                 _console.print("[bold red]✗ Plan aborted:[/bold red] step verification failed.")
             if saas_cp is not None:
-                saas_cp.step(messages, "completed", in_tok=_scp_in, out_tok=_scp_out)
+                saas_cp.step(messages, "idle", in_tok=_scp_in, out_tok=_scp_out)
             if messages_out is not None:
                 messages_out[:] = [m for m in messages if m.get("role") != "system"]
             return

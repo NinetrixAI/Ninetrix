@@ -2,9 +2,10 @@
 
 export function normalizeStatus(
   s: string
-): "running" | "completed" | "error" | "pending" | "cancelled" | "budget" {
+): "running" | "completed" | "idle" | "error" | "pending" | "cancelled" | "budget" {
   if (s === "in_progress" || s === "started" || s === "running") return "running";
   if (s === "completed" || s === "approved") return "completed";
+  if (s === "idle") return "idle";
   if (s === "error" || s === "failed") return "error";
   if (s === "waiting_for_approval" || s === "pending") return "pending";
   if (s === "budget_exceeded") return "budget";
@@ -17,6 +18,7 @@ export const STATUS_STYLES: Record<
 > = {
   running:   { bg: "rgba(16,185,129,0.1)",  text: "#10B981", dot: "#10B981", label: "Running"   },
   completed: { bg: "rgba(59,130,246,0.12)", text: "#60A5FA", dot: "#3B82F6", label: "Completed" },
+  idle:      { bg: "rgba(139,92,246,0.1)",  text: "#A78BFA", dot: "#8B5CF6", label: "Idle"      },
   error:     { bg: "rgba(239,68,68,0.1)",   text: "#EF4444", dot: "#EF4444", label: "Failed"    },
   pending:   { bg: "rgba(245,158,11,0.1)",  text: "#F59E0B", dot: "#F59E0B", label: "Pending"   },
   cancelled: { bg: "rgba(100,116,139,0.08)",text: "#64748B", dot: "#475569", label: "Cancelled" },
