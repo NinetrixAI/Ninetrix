@@ -41,18 +41,19 @@ async def list_pending_approvals():
 @router.post("/{trace_id}/{step_index}/approve", status_code=200)
 async def approve(trace_id: str, step_index: int):
     """Approve a pending tool call — the running container will poll this and resume."""
-    updated = await db.pool().execute(
+    row = await db.pool().fetchrow(
         """
         UPDATE agentfile_checkpoints
         SET status = 'approved'
         WHERE trace_id = $1 AND step_index = $2 AND status = 'waiting_for_approval'
+        RETURNING id
         """,
         trace_id,
         step_index,
     )
-    if updated == "UPDATE 0":
+    if row is None:
         raise HTTPException(
-            status_code=404,
+            status_code=409,
             detail="No pending approval found for this trace_id + step_index",
         )
     return {"ok": True, "trace_id": trace_id, "step_index": step_index, "status": "approved"}
@@ -61,18 +62,19 @@ async def approve(trace_id: str, step_index: int):
 @router.post("/{trace_id}/{step_index}/reject", status_code=200)
 async def reject(trace_id: str, step_index: int):
     """Reject a pending tool call — the container will skip the tool and continue."""
-    updated = await db.pool().execute(
+    row = await db.pool().fetchrow(
         """
         UPDATE agentfile_checkpoints
         SET status = 'rejected'
         WHERE trace_id = $1 AND step_index = $2 AND status = 'waiting_for_approval'
+        RETURNING id
         """,
         trace_id,
         step_index,
     )
-    if updated == "UPDATE 0":
+    if row is None:
         raise HTTPException(
-            status_code=404,
+            status_code=409,
             detail="No pending approval found for this trace_id + step_index",
         )
     return {"ok": True, "trace_id": trace_id, "step_index": step_index, "status": "rejected"}
