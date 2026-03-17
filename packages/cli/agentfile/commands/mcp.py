@@ -67,6 +67,24 @@ def _gateway_online() -> bool:
         return False
 
 
+def _fmt_relative(iso: str) -> str:
+    """Format an ISO timestamp as a human-readable relative string."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        delta = datetime.now(timezone.utc) - dt
+        s = int(delta.total_seconds())
+        if s < 60:
+            return "just now"
+        if s < 3600:
+            return f"{s // 60}m ago"
+        if s < 86400:
+            return f"{s // 3600}h ago"
+        return f"{s // 86400}d ago"
+    except Exception:
+        return iso
+
+
 def _tools_by_server(tools: list[dict]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for t in tools:
@@ -114,6 +132,32 @@ def mcp_cmd() -> None:
     """Manage MCP tool servers on the local gateway worker."""
 
 
+# ── SaaS integration helpers ─────────────────────────────────────────────────
+
+def _saas_connected_integrations() -> list[dict]:
+    """Return integrations connected via the Ninetrix vault.
+
+    Each entry is a dict with keys: id, name, mcp_source, account_label.
+    Returns [] if not in SaaS mode or API is unreachable.
+    """
+    api_url = resolve_saas_url()
+    if not api_url:
+        return []
+    try:
+        import httpx
+        from agentfile.core.auth import auth_headers
+        resp = httpx.get(
+            f"{api_url}/v1/integrations",
+            headers=auth_headers(api_url),
+            timeout=5,
+        )
+        if not resp.is_success:
+            return []
+        return [r for r in resp.json() if r.get("connected")]
+    except Exception:
+        return []
+
+
 # ── mcp status ────────────────────────────────────────────────────────────────
 
 @mcp_cmd.command("status")
@@ -122,74 +166,80 @@ def mcp_status() -> None:
     console.print()
     console.print("[bold purple]ninetrix mcp status[/bold purple]\n")
 
-    if not _gateway_online():
-        console.print(
-            f"  [red]✗[/red] Gateway not reachable at [bold]{_gw_url()}[/bold]\n"
-            "  Run [bold]ninetrix dev[/bold] to start the full stack.\n"
-        )
-        raise SystemExit(1)
-
-    tools = _gateway_tools()
+    # ── Gather data ───────────────────────────────────────────────────────────
+    gw_online = _gateway_online()
+    tools = _gateway_tools() if gw_online else []
     by_server = _tools_by_server(tools)
     configured = worker_config.list_servers()
+    cloud = _saas_connected_integrations() if _is_saas_mode() else []
 
-    console.print(f"  [green]✓[/green] Gateway  [bold]{_gw_url()}[/bold]  "
-                  f"({len(tools)} tool(s) available)\n")
+    if gw_online:
+        console.print(f"  [green]✓[/green] Gateway  [bold]{_gw_url()}[/bold]  "
+                      f"({len(tools)} tool(s) available)\n")
+    else:
+        console.print(
+            f"  [yellow]⚠[/yellow]  Gateway not reachable at [bold]{_gw_url()}[/bold]  "
+            "[dim](run [bold]ninetrix dev[/bold] to start)[/dim]\n"
+        )
 
-    t = Table(show_header=True, header_style="bold")
-    t.add_column("Server", style="bold cyan")
-    t.add_column("Status")
-    t.add_column("Tools", justify="right")
-    t.add_column("Credentials")
-
-    all_names = sorted(set(configured) | set(by_server.keys()))
+    # ── Build unified rows ────────────────────────────────────────────────────
+    # Each row: (name, source, status, tool_count_str, last_used_str)
+    rows: list[tuple[str, str, str, str, str]] = []
     any_issue = False
 
-    for name in all_names:
+    # Local: union of worker config + live gateway tools
+    local_names = sorted(set(configured) | set(by_server.keys()))
+    for name in local_names:
         tool_count = by_server.get(name, 0)
         in_config = name in configured
         entry = mcp_catalog.get(name)
 
-        # Status
         if tool_count > 0:
             status = "[green]running[/green]"
         elif in_config:
             status = "[red]not loaded[/red]"
             any_issue = True
+            if entry and entry.required_env:
+                for var in entry.required_env:
+                    if not entry.resolve_env_value(var):
+                        any_issue = True
         else:
             status = "[dim]dynamic[/dim]"
 
-        # Credentials
-        if entry and entry.required_env:
-            cred_parts = []
-            for var, label in entry.required_env.items():
-                val = entry.resolve_env_value(var)
-                if val:
-                    cred_parts.append(f"[green]{var} ✓[/green]")
-                else:
-                    cred_parts.append(f"[red]{var} ✗[/red]")
-                    if in_config:
-                        any_issue = True
-            cred_str = "  ".join(cred_parts)
-        elif entry:
-            cred_str = "[dim]none required[/dim]"
-        else:
-            cred_str = "[dim]—[/dim]"
+        rows.append((name, "[dim]local[/dim]", status, str(tool_count) if tool_count else "—", "[dim]—[/dim]"))
 
-        t.add_row(name, status, str(tool_count) if tool_count else "—", cred_str)
+    # Cloud: connected integrations from SaaS vault
+    cloud_local_names = {r[0] for r in rows}
+    for item in sorted(cloud, key=lambda x: x.get("mcp_source") or x.get("id", "")):
+        name = item.get("mcp_source") or item.get("id", "?")
+        display = item.get("name", name)
+        if name in cloud_local_names:
+            continue  # already shown as local
+        connected_at = item.get("connected_at")
+        last_used = _fmt_relative(connected_at) if connected_at else "[dim]—[/dim]"
+        rows.append((display, "[blue]cloud[/blue]", "[green]connected[/green]", "—", last_used))
 
-    if all_names:
+    # ── Render single table ───────────────────────────────────────────────────
+    if rows:
+        t = Table(show_header=True, header_style="bold")
+        t.add_column("Server", style="bold cyan")
+        t.add_column("Source")
+        t.add_column("Status")
+        t.add_column("Tools", justify="right")
+        t.add_column("Last used")
+        for row in rows:
+            t.add_row(*row)
         console.print(t)
     else:
-        console.print("  [dim]No servers configured and no tools in gateway.[/dim]")
+        console.print("  [dim]No servers configured. Run [bold]ninetrix mcp add <server>[/bold] or [bold]ninetrix mcp connect <server>[/bold][/dim]")
 
     console.print()
 
     if any_issue:
-        console.print("  [yellow]Some servers have issues.[/yellow]")
+        console.print("  [yellow]Some local servers have issues.[/yellow]")
         console.print("  Run [bold]ninetrix mcp add <server>[/bold] to fix missing servers.")
         console.print("  Run [bold]ninetrix gateway doctor[/bold] for a full diagnostic.\n")
-    else:
+    elif rows:
         console.print(f"  [dim]Worker config:[/dim] {worker_config.find_config_path()}\n")
 
 
@@ -708,6 +758,52 @@ def _print_catalog_detail(name: str, entry: mcp_catalog.CatalogEntry) -> None:
     console.print(f"    [bold]ninetrix mcp add {name}[/bold]\n")
 
 
+# ── post-connect local wiring ─────────────────────────────────────────────────
+
+def _post_connect_local_setup(name: str, api_url: str, headers: dict) -> None:
+    """After a successful SaaS connect, wire the server into the local mcp-worker.
+
+    Steps:
+      1. Add the server to mcp-worker.yaml (tells the worker which package to run).
+      2. Restart the mcp-worker — on first tool call it will fetch credentials
+         JIT from the vault via the gateway tool-credential endpoint.
+    """
+    entry = mcp_catalog.get(name)
+    if entry is None:
+        console.print("  Run [bold]ninetrix mcp status[/bold] to verify tools are available.\n")
+        return
+
+    # 1. Add to mcp-worker.yaml (no credentials — worker fetches them JIT)
+    block = entry.worker_yaml_block()
+    worker_config.add_server(name, block)
+    console.print(
+        f"  [green]✓[/green] Added [bold]{name}[/bold] to "
+        f"[dim]{worker_config.find_config_path()}[/dim]\n"
+    )
+
+    # 2. Restart worker so it picks up the new server entry
+    if _gateway_online():
+        console.print("  Restarting mcp-worker…\n")
+        ok = _restart_worker_with_feedback(verbose=False)
+        if ok:
+            count = _wait_for_server(name, timeout=30)
+            if count:
+                console.print(
+                    f"  [green]✓[/green] [bold]{name}[/bold] ready — "
+                    f"{count} tool(s) available\n"
+                )
+            else:
+                console.print(
+                    f"  [yellow]⚠[/yellow]  Worker restarted but [bold]{name}[/bold] "
+                    "registered 0 tools — credentials will be fetched on first tool call.\n"
+                )
+    else:
+        console.print(
+            "  [dim]Gateway not running — start with [bold]ninetrix dev[/bold] "
+            "to activate the new server.[/dim]\n"
+        )
+
+
 # ── mcp connect ───────────────────────────────────────────────────────────────
 
 @mcp_cmd.command("connect")
@@ -788,8 +884,8 @@ def mcp_connect(ctx: click.Context, name: str, no_browser: bool, no_wait: bool) 
         )
         if r.is_success and r.json().get("connected"):
             label = r.json().get("account_label") or f"{name}: connected"
-            console.print(f"  [green]✓[/green] {label}")
-            console.print("  Run [bold]ninetrix mcp status[/bold] to verify tools are available.\n")
+            console.print(f"  [green]✓[/green] {label}\n")
+            _post_connect_local_setup(name, api_url, headers)
             return
     except httpx.TimeoutException:
         pass

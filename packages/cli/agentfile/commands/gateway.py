@@ -207,20 +207,52 @@ def _collect_creds(server_names: list[str], dotenv: dict[str, str]) -> dict[str,
     return result
 
 
+def _saas_worker_env() -> dict[str, str]:
+    """Return MCP_SAAS_API_URL + MCP_GATEWAY_TOKEN when the user is logged in.
+
+    This enables SaaS mode in the mcp-worker: credentials are fetched JIT from
+    the vault on first tool call instead of being injected as env vars.
+    Returns {} when not logged in — worker falls back to yaml env blocks.
+    """
+    from agentfile.core.config import resolve_saas_url
+    from agentfile.core.auth import read_token
+    saas_url = resolve_saas_url()
+    if not saas_url:
+        return {}
+    token = read_token(saas_url)
+    if not token:
+        return {}
+    # Translate localhost URL to host.docker.internal so the container can reach it
+    container_url = saas_url.replace("localhost", "host.docker.internal").replace("127.0.0.1", "host.docker.internal")
+    return {
+        "MCP_SAAS_API_URL": container_url,
+        "MCP_GATEWAY_TOKEN": token,
+    }
+
+
 def _build_proc_env(compose: Path | None = None) -> dict[str, str]:
-    """Build subprocess env with auto-collected credentials injected."""
+    """Build subprocess env for docker-compose.
+
+    In SaaS mode (user logged in): injects MCP_SAAS_API_URL + MCP_GATEWAY_TOKEN so
+    the worker fetches credentials JIT from the vault — no credential env vars needed.
+    In dev mode: collects credentials from host env / .env and forwards them directly.
+    """
     dotenv = _load_dotenv()
     from agentfile.core import worker_config as _wc
     server_names = _wc.list_servers()
     if not server_names and compose:
-        # Fallback: parse server names from file next to compose
         worker_cfg = _find_worker_config(compose)
         if worker_cfg:
             server_names = _parse_server_names(worker_cfg)
+
+    saas_env = _saas_worker_env()
+    if saas_env:
+        # SaaS mode: worker fetches credentials on demand — no need to forward them
+        return {**os.environ, **saas_env}
+
+    # Dev mode: forward credentials from host env / .env
     creds = _collect_creds(server_names, dotenv)
-    if creds:
-        return {**os.environ, **creds}
-    return dict(os.environ)
+    return {**os.environ, **creds}
 
 
 # ── CLI group ──────────────────────────────────────────────────────────────────
