@@ -22,6 +22,8 @@ from rich.console import Console
 from rich.table import Table
 
 from agentfile.core import mcp_catalog, worker_config
+from agentfile.core.auth import auth_headers, read_token
+from agentfile.core.config import resolve_api_url, resolve_saas_url
 
 console = Console()
 
@@ -275,6 +277,9 @@ def mcp_list(agentfile_path: str) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompts")
 @click.option("--no-restart", is_flag=True, help="Write config but do not restart worker")
 @click.option("--custom", "is_custom", is_flag=True, help="Add a custom server not in the catalog")
+@click.option("--local", "local_only", is_flag=True,
+              help="Configure via local mcp-worker.yaml instead of the Ninetrix vault")
+@click.option("--no-browser", is_flag=True, help="(SaaS) Print connect URL without opening browser")
 @click.option("--type", "server_type",
               type=click.Choice(["npx", "uvx", "docker", "python"], case_sensitive=False),
               default=None, help="(--custom) Server launch type")
@@ -283,11 +288,15 @@ def mcp_list(agentfile_path: str) -> None:
               help="(--custom) Extra CLI args (repeatable)")
 @click.option("--env", "-e", "env_pairs", multiple=True, metavar="VAR=SOURCE",
               help="(--custom) Env var mappings e.g. API_KEY=${MY_KEY} (repeatable)")
+@click.pass_context
 def mcp_add(
+    ctx: click.Context,
     name: str,
     yes: bool,
     no_restart: bool,
     is_custom: bool,
+    local_only: bool,
+    no_browser: bool,
     server_type: str | None,
     package: str | None,
     extra_args: tuple[str, ...],
@@ -303,6 +312,13 @@ def mcp_add(
     """
     console.print()
     console.print("[bold purple]ninetrix mcp add[/bold purple]\n")
+
+    # In SaaS mode, credentials live in the vault — redirect to `mcp connect`
+    # unless the user explicitly wants local worker config (--local).
+    if not local_only and not is_custom and _is_saas_mode():
+        console.print("  [dim]SaaS mode detected — connecting via Ninetrix vault.[/dim]\n")
+        ctx.invoke(mcp_connect, name=name, no_browser=no_browser, no_wait=False)
+        return
 
     already = worker_config.has_server(name)
 
@@ -692,6 +708,98 @@ def _print_catalog_detail(name: str, entry: mcp_catalog.CatalogEntry) -> None:
     console.print(f"    [bold]ninetrix mcp add {name}[/bold]\n")
 
 
+# ── mcp connect ───────────────────────────────────────────────────────────────
+
+@mcp_cmd.command("connect")
+@click.argument("name")
+@click.option("--no-browser", is_flag=True, help="Print URL only, don't open browser")
+@click.option("--no-wait", is_flag=True, help="Print URL and exit without waiting (for CI)")
+@click.pass_context
+def mcp_connect(ctx: click.Context, name: str, no_browser: bool, no_wait: bool) -> None:
+    """Connect an MCP server via the Ninetrix credential vault.
+
+    \b
+    Opens a browser to authorize the integration, then waits for confirmation.
+    Requires: ninetrix auth login
+
+    \b
+    Examples:
+      ninetrix mcp connect github
+      ninetrix mcp connect tavily --no-browser
+    """
+    try:
+        import httpx
+    except ImportError:
+        console.print("[red]httpx is required: pip install httpx[/red]")
+        raise SystemExit(1)
+
+    console.print()
+    console.print("[bold purple]ninetrix mcp connect[/bold purple]\n")
+
+    api_url = resolve_saas_url()
+    if not api_url:
+        console.print("  [red]Not logged in.[/red]  Run: [bold]ninetrix auth login --token <token>[/bold]\n")
+        raise SystemExit(1)
+
+    token = read_token(api_url)
+    if not token:
+        console.print("  [red]Not logged in.[/red]  Run: [bold]ninetrix auth login --token <token>[/bold]\n")
+        raise SystemExit(1)
+
+    headers = auth_headers(api_url)
+
+    # 1. Request a magic link from the API
+    try:
+        resp = httpx.post(
+            f"{api_url}/v1/integrations/{name}/connect-link",
+            headers=headers,
+            timeout=10,
+        )
+    except httpx.ConnectError:
+        console.print(f"  [red]✗[/red] Cannot reach API at [bold]{api_url}[/bold]\n")
+        raise SystemExit(1)
+
+    if resp.status_code == 404:
+        console.print(f"  [red]'{name}' is not a known integration.[/red]")
+        console.print("  Run [bold]ninetrix mcp catalog[/bold] to see available servers.\n")
+        raise SystemExit(1)
+    if resp.status_code == 429:
+        console.print("  [yellow]Too many recent connect attempts.[/yellow] Wait a moment and retry.\n")
+        raise SystemExit(1)
+    resp.raise_for_status()
+
+    url = resp.json()["url"]
+
+    # 2. Open browser (unless suppressed)
+    console.print(f"  Opening browser: [bold]{url}[/bold]\n")
+    if not no_browser:
+        click.launch(url)
+
+    if no_wait:
+        return
+
+    # 3. Single long-poll — server blocks up to 90s, so one request is enough
+    console.print("  Waiting for authorization… [dim](Ctrl+C to cancel)[/dim]\n")
+    try:
+        r = httpx.get(
+            f"{api_url}/v1/integrations/{name}/wait-connected",
+            headers=headers,
+            timeout=95,  # slightly longer than server-side 90s
+        )
+        if r.is_success and r.json().get("connected"):
+            label = r.json().get("account_label") or f"{name}: connected"
+            console.print(f"  [green]✓[/green] {label}")
+            console.print("  Run [bold]ninetrix mcp status[/bold] to verify tools are available.\n")
+            return
+    except httpx.TimeoutException:
+        pass
+    except httpx.ConnectError:
+        pass
+
+    console.print("  [yellow]Timed out waiting for authorization.[/yellow]")
+    console.print(f"  Complete manually: {url}\n")
+
+
 # ── mcp restart ───────────────────────────────────────────────────────────────
 
 @mcp_cmd.command("restart")
@@ -709,6 +817,14 @@ def mcp_restart() -> None:
 
 
 # ── .env helpers ───────────────────────────────────────────────────────────────
+
+def _is_saas_mode() -> bool:
+    """Return True when a saas-api is reachable and the user has a token."""
+    api_url = resolve_saas_url()
+    if not api_url:
+        return False
+    return bool(read_token(api_url))
+
 
 def _nearest_dotenv() -> str:
     """Return the path of the .env file to use for saving credentials."""

@@ -75,6 +75,47 @@ def resolve_api_url() -> str:
     )
 
 
+# ── SaaS API URL (for vault-requiring commands like mcp connect) ─────────────
+
+def resolve_saas_url() -> str | None:
+    """Return the saas-api URL for commands that require the credential vault.
+
+    Resolution order (first match wins):
+      1. AGENTFILE_API_URL env var  — explicit override always wins
+      2. ~/.agentfile/config.json   — saved by `ninetrix auth login`
+      3. localhost:8001 probe       — auto-detect local saas-api dev instance
+      4. auth.json token present    — user is logged in, assume cloud default
+      5. None                       — caller should print a login hint
+    """
+    # 1. Explicit override
+    if url := os.environ.get("AGENTFILE_API_URL"):
+        return url
+
+    # 2. Saved by auth login
+    if url := get_api_url():
+        return url
+
+    # 3. Auto-probe local saas-api (silent, 1s timeout — zero config for local dev)
+    try:
+        import httpx
+        r = httpx.get("http://localhost:8001/health", timeout=1.0)
+        if r.is_success:
+            return "http://localhost:8001"
+    except Exception:
+        pass
+
+    # 4. Token exists → user logged in at some point, cloud is the safe default
+    _auth_file = Path.home() / ".agentfile" / "auth.json"
+    if _auth_file.exists():
+        try:
+            if json.loads(_auth_file.read_text()).get("token"):
+                return _CLOUD_DEFAULT
+        except Exception:
+            pass
+
+    return None
+
+
 # ── Source labelling (for ninetrix config show) ─────────────────────────────
 
 def api_url_source() -> str:
