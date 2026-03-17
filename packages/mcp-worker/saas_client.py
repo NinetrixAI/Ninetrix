@@ -20,7 +20,6 @@ import httpx
 log = logging.getLogger(__name__)
 
 SAAS_API_URL: str = os.getenv("MCP_SAAS_API_URL", "").rstrip("/")
-GATEWAY_SERVICE_SECRET: str = os.getenv("MCP_GATEWAY_SERVICE_SECRET", "dev-gateway-secret")
 WORKER_TOKEN: str = os.getenv("MCP_GATEWAY_TOKEN", "")
 
 
@@ -28,8 +27,8 @@ def is_saas_mode() -> bool:
     return bool(SAAS_API_URL and WORKER_TOKEN)
 
 
-def _headers() -> dict[str, str]:
-    return {"X-Gateway-Secret": GATEWAY_SERVICE_SECRET}
+def _auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {WORKER_TOKEN}"}
 
 
 async def get_tool_credential(
@@ -38,6 +37,8 @@ async def get_tool_credential(
 ) -> dict[str, str]:
     """
     Fetch env vars for a single integration from saas-api.
+    Calls GET /v1/integrations/credentials (Bearer-auth, no shared secret required)
+    and returns only the env-var map for the requested integration_id.
     Returns {} in dev mode or on failure (caller falls back to yaml env block).
     """
     if not is_saas_mode():
@@ -45,27 +46,23 @@ async def get_tool_credential(
 
     try:
         async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.post(
-                f"{SAAS_API_URL}/internal/v1/gateway/tool-credential",
-                json={
-                    "worker_token": WORKER_TOKEN,
-                    "integration_id": integration_id,
-                    "tool_name": tool_name,
-                },
-                headers=_headers(),
+            resp = await client.get(
+                f"{SAAS_API_URL}/v1/integrations/credentials",
+                headers=_auth_headers(),
             )
-        if resp.status_code == 404:
-            log.info("Integration '%s' not connected in saas-api", integration_id)
-            return {}
         if resp.status_code == 401:
             log.warning("Worker token rejected by saas-api — check MCP_GATEWAY_TOKEN")
             return {}
         resp.raise_for_status()
-        env_vars = resp.json().get("env_vars", {})
-        log.info(
-            "Fetched %d credential(s) for integration '%s'",
-            len(env_vars), integration_id,
-        )
+        all_creds: dict[str, dict[str, str]] = resp.json()
+        env_vars = all_creds.get(integration_id, {})
+        if env_vars:
+            log.info(
+                "Fetched %d credential(s) for integration '%s'",
+                len(env_vars), integration_id,
+            )
+        else:
+            log.info("Integration '%s' not connected in saas-api", integration_id)
         return env_vars
     except Exception as exc:
         log.warning("Could not fetch credentials for '%s': %s", integration_id, exc)
@@ -86,10 +83,7 @@ async def refresh_credential(integration_id: str) -> dict[str, str]:
             resp = await client.post(
                 f"{SAAS_API_URL}/internal/v1/runners/credentials/refresh",
                 json={"integration_id": integration_id},
-                headers={
-                    "Authorization": f"Bearer {WORKER_TOKEN}",
-                    **_headers(),
-                },
+                headers=_auth_headers(),
             )
         resp.raise_for_status()
         # After refresh, re-fetch the updated credential
