@@ -9,17 +9,14 @@ LABEL org.opencontainers.image.source="https://github.com/ninetrix/ninetrix"
 
 WORKDIR /app
 
+{% set _pkgs = ["litellm>=1.50,<2.0"] -%}
+{% if use_mcp_gateway -%}{% set _pkgs = _pkgs + ["httpx>=0.27"] -%}{% endif -%}
+{% if agent.tools -%}{% set _pkgs = _pkgs + ["requests>=2.31"] -%}{% endif -%}
+{% set _pkgs = _pkgs + ["pyyaml>=6.0", "rich>=13"] -%}
 # Install Python runtime dependencies
-RUN pip install --no-cache-dir \
-    "litellm>=1.50" \
-{% if use_mcp_gateway %}
-    "httpx>=0.27" \
-{% endif %}
-{% if agent.tools %}
-    requests>=2.31 \
-{% endif %}
-    pyyaml>=6.0 \
-    rich>=13
+# litellm pin: review quarterly — litellm has a history of breaking changes
+RUN pip install --no-cache-dir{% for _pkg in _pkgs %} \
+    "{{ _pkg }}"{% endfor %}
 {% if has_composio_tools %}
 
 # Install Composio SDK
