@@ -1,0 +1,34 @@
+# Web research agent using Tavily search via the Ninetrix MCP gateway.
+#
+# Prerequisites:
+#   1. Log in:         ninetrix auth login --token <your-token>
+#   2. Connect Tavily: ninetrix mcp connect tavily
+#   3. Start the stack: ninetrix dev
+#
+# Then build and run:
+#   ninetrix build
+#   ninetrix run
+
+agents:
+  researcher:
+    metadata:
+      name: researcher
+      role: Web research assistant
+      goal: Answer questions with accurate, up-to-date information from the web
+      instructions: |
+        Use Tavily search to find current, reliable information.
+        Always search before answering — do not rely on training data for facts.
+        Cite your sources by including the URL for each key claim.
+        If the first search doesn't cover the question fully, refine and search again.
+      constraints:
+        - Only state facts supported by search results
+        - Always include at least one source URL in your answer
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.2
+
+    tools:
+      - name: tavily
+        source: mcp://tavily

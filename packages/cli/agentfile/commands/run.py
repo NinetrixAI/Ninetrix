@@ -111,10 +111,18 @@ def _read_machine_secret() -> str | None:
 
 
 def _inject_integration_credentials(env: dict[str, str]) -> None:
-    """Query the Integration Hub API and inject credentials as env vars. Silent on failure."""
+    """Inject non-MCP integration credentials into the agent container env.
+
+    MCP tool credentials (TAVILY_API_KEY, GITHUB_TOKEN, etc.) are handled by the
+    mcp-worker JIT on first tool call — the agent container never needs them.
+    This function only fetches direct-API credentials (LLM keys, Composio, etc.)
+    from the local API if it is running.
+    """
     from agentfile.core.auth import auth_headers
     from agentfile.core.config import resolve_api_url
-    api_url = os.environ.get("AGENTFILE_API_URL") or resolve_api_url()
+    api_url = resolve_api_url()
+    if not api_url:
+        return
     try:
         resp = httpx.get(
             f"{api_url}/integrations/credentials",
@@ -124,13 +132,9 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
         if resp.status_code == 200:
             for _integration_id, creds in resp.json().items():
                 for key, value in creds.items():
-                    env.setdefault(key, value)  # never overwrite vars already set above
+                    env.setdefault(key, value)
     except Exception:
-        console.print(
-            "  [yellow]⚠[/yellow]  Could not fetch integration credentials — "
-            "agents may fail at first tool call. "
-            "Run [bold]ninetrix dev[/bold] to start the local stack."
-        )
+        pass
 
 
 @click.command("run")
@@ -274,8 +278,11 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     if _api_url:
         env["AGENTFILE_API_URL"] = _docker_url(_api_url)
 
-        # 1. Machine secret — always wins when local API is up (guaranteed to work)
-        if _is_local_api_running():
+        # 1. Machine secret — only valid for the local API (port 8000), not SaaS
+        _is_local_target = _api_url and any(
+            h in _api_url for h in ("localhost:8000", "127.0.0.1:8000", "host.docker.internal:8000")
+        )
+        if _is_local_target and _is_local_api_running():
             _secret = _read_machine_secret()
             if _secret:
                 env["AGENTFILE_RUNNER_TOKEN"] = _secret
