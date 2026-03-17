@@ -6,9 +6,11 @@ import {
   listThreads,
   getThreadTimeline,
   checkApiStatus,
+  subscribeThreadStream,
   type ThreadSummary,
   type TimelineEvent,
   type ApiStatus,
+  type StreamUpdate,
 } from "@/lib/api";
 import { timelineEventsToTraceNodes, calcTotalMs, type TraceNode } from "@/lib/trace";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -1071,7 +1073,8 @@ function TraceDrawer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<TraceNode | null>(null);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sseRef = useRef<(() => void) | null>(null);
+  const accEventsRef = useRef<TimelineEvent[]>([]);
 
   // Resizable split for timeline view
   const [topHeight, setTopHeight] = useState(280);
@@ -1103,6 +1106,7 @@ function TraceDrawer({
   const fetchTimeline = useCallback(async () => {
     try {
       const evs = await getThreadTimeline(thread.thread_id);
+      accEventsRef.current = evs;
       setEvents(evs);
       setNodes(timelineEventsToTraceNodes(evs, thread));
       setError(null);
@@ -1117,17 +1121,55 @@ function TraceDrawer({
     setLoading(true);
     setNodes([]);
     setEvents([]);
+    accEventsRef.current = [];
     setSelectedNode(null);
     fetchTimeline();
 
-    // Poll if running
+    // Stream live updates if running
     if (normalizeStatus(thread.status) === "running") {
-      pollRef.current = setInterval(fetchTimeline, 3000);
+      // Reset accumulator so first SSE batch replaces rather than duplicates
+      accEventsRef.current = [];
+      const cleanup = subscribeThreadStream(
+        thread.thread_id,
+        (update: StreamUpdate) => {
+          if (update.events.length > 0) {
+            accEventsRef.current = [...accEventsRef.current, ...update.events];
+            setEvents([...accEventsRef.current]);
+            setNodes(timelineEventsToTraceNodes(accEventsRef.current, thread));
+          }
+        },
+        () => {
+          // Final refresh on completion to get accurate metadata
+          fetchTimeline();
+        },
+      );
+      sseRef.current = cleanup;
+      return () => {
+        cleanup();
+        sseRef.current = null;
+      };
     }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => {};
   }, [thread.thread_id, fetchTimeline, thread.status]);
+
+  // Watch for status changes when not streaming (handles thread resuming after completion)
+  const isRunning = normalizeStatus(thread.status) === "running";
+  useEffect(() => {
+    if (isRunning) return;
+    const iv = setInterval(async () => {
+      try {
+        const { items } = await listThreads({ limit: 200 });
+        const updated = items.find((t) => t.thread_id === thread.thread_id);
+        if (updated && updated.status !== thread.status) {
+          if (normalizeStatus(updated.status) === "running") {
+            accEventsRef.current = [];
+            fetchTimeline();
+          }
+        }
+      } catch { /* silent */ }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [thread.thread_id, thread.status, isRunning, fetchTimeline]);
 
   const totalTokens = formatTokens(thread.tokens_used);
 
@@ -1938,6 +1980,12 @@ export default function ThreadsClient() {
       setThreads(data.items ?? []);
       setTotal(data.total ?? 0);
       setError(null);
+      // Keep the drawer's thread in sync so status-change effects fire correctly
+      setSelected((prev) => {
+        if (!prev) return prev;
+        const fresh = (data.items ?? []).find((t) => t.thread_id === prev.thread_id);
+        return fresh ?? prev;
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load threads");
     } finally {

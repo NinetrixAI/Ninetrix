@@ -103,6 +103,55 @@ export async function getThreadTimeline(threadId: string): Promise<TimelineEvent
   return apiFetch<TimelineEvent[]>(`/threads/${encodeURIComponent(threadId)}/timeline`);
 }
 
+export interface StreamUpdate {
+  type: string;
+  thread_id: string;
+  status: string;
+  step_index: number;
+  events: TimelineEvent[];
+}
+
+/**
+ * Open an SSE connection to /threads/{threadId}/stream.
+ * Returns a cleanup function that closes the connection.
+ *
+ * onUpdate is called for each batch of new events.
+ * onDone is called when the thread reaches a terminal state.
+ */
+export function subscribeThreadStream(
+  threadId: string,
+  onUpdate: (update: StreamUpdate) => void,
+  onDone: () => void,
+): () => void {
+  const url = `${API_BASE}/threads/${encodeURIComponent(threadId)}/stream`;
+  const es = new EventSource(url);
+
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data) as StreamUpdate;
+      onUpdate(data);
+    } catch { /* ignore malformed frames */ }
+  };
+
+  es.addEventListener("done", () => {
+    onDone();
+    es.close();
+  });
+
+  es.addEventListener("error", () => {
+    // server-sent named error event (e.g. thread not found)
+    es.close();
+  });
+
+  es.onerror = () => {
+    // network error — stop attempting to reconnect
+    onDone();
+    es.close();
+  };
+
+  return () => es.close();
+}
+
 export async function listAgents(opts?: {
   limit?: number;
   offset?: number;

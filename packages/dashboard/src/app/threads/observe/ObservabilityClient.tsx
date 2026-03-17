@@ -7,9 +7,11 @@ import {
   listThreads,
   getThreadTimeline,
   checkApiStatus,
+  subscribeThreadStream,
   type ThreadSummary,
   type TimelineEvent,
   type ApiStatus,
+  type StreamUpdate,
 } from "@/lib/api";
 import { timelineEventsToTraceNodes, calcTotalMs, type TraceNode } from "@/lib/trace";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -706,7 +708,7 @@ function GanttChart({
                 fontFamily: "var(--font-jb-mono, monospace)", gap: 8,
               }}>
                 <span style={{ opacity: 0.4 }}>◌</span>
-                Waiting for events…
+                {isRunning ? "Agent is starting…" : "Waiting for events…"}
               </div>
             )}
           </div>
@@ -1146,15 +1148,17 @@ export default function ObservabilityClient() {
   const [ganttTab, setGanttTab] = useState<"all" | string>("all");
   const [liveMs, setLiveMs] = useState(0);
   const [elapsedDisplay, setElapsedDisplay] = useState("0ms");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sseRef = useRef<(() => void) | null>(null);
   const liveRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const accEventsRef = useRef<TimelineEvent[]>([]);
 
   const isRunning = thread ? normalizeStatus(thread.status) === "running" : false;
 
-  // Fetch timeline
+  // Fetch full timeline (used for initial load and fallback refresh)
   const fetchTimeline = useCallback(async (currentThread: ThreadSummary) => {
     try {
       const evs = await getThreadTimeline(currentThread.thread_id);
+      accEventsRef.current = evs;
       const built = timelineEventsToTraceNodes(evs, currentThread);
       setNodes(built);
       setError(null);
@@ -1186,21 +1190,68 @@ export default function ObservabilityClient() {
     return () => { cancelled = true; };
   }, [threadId, fetchTimeline]);
 
-  // Poll when running
+  // Stream live updates via SSE when thread is running
   useEffect(() => {
     if (!thread || !isRunning) return;
-    pollRef.current = setInterval(async () => {
+
+    // Reset accumulator so first SSE batch replaces rather than duplicates
+    // (server always starts from step 0, so first tick re-sends all existing events)
+    accEventsRef.current = [];
+
+    const cleanup = subscribeThreadStream(
+      thread.thread_id,
+      (update: StreamUpdate) => {
+        // Append new events and rebuild nodes
+        if (update.events.length > 0) {
+          accEventsRef.current = [...accEventsRef.current, ...update.events];
+          setNodes(timelineEventsToTraceNodes(accEventsRef.current, thread));
+        }
+        // Update thread metadata when status or step changes
+        setThread((prev) =>
+          prev
+            ? { ...prev, status: update.status, step_index: update.step_index }
+            : prev,
+        );
+      },
+      () => {
+        // Terminal state reached — do a final full refresh to pick up any
+        // metadata (duration_ms, tokens_used) that only the thread list has
+        listThreads({ limit: 200 })
+          .then(({ items }) => {
+            const final = items.find((t) => t.thread_id === thread.thread_id);
+            if (final) {
+              setThread(final);
+              fetchTimeline(final);
+            }
+          })
+          .catch(() => { /* best-effort */ });
+      },
+    );
+
+    sseRef.current = cleanup;
+    return () => {
+      cleanup();
+      sseRef.current = null;
+    };
+  }, [thread?.thread_id, isRunning, fetchTimeline]);
+
+  // Watch for status changes when not streaming (handles thread resuming after completion)
+  useEffect(() => {
+    if (!thread || isRunning) return;
+    const iv = setInterval(async () => {
       try {
-        const { items: threads } = await listThreads({ limit: 200 });
-        const updated = threads.find((t) => t.thread_id === thread.thread_id);
-        if (updated) {
+        const { items } = await listThreads({ limit: 200 });
+        const updated = items.find((t) => t.thread_id === thread.thread_id);
+        if (updated && updated.status !== thread.status) {
           setThread(updated);
-          await fetchTimeline(updated);
+          if (normalizeStatus(updated.status) === "running") {
+            await fetchTimeline(updated);
+          }
         }
       } catch { /* silent */ }
     }, 3000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, [thread?.thread_id, isRunning, fetchTimeline]);
+    return () => clearInterval(iv);
+  }, [thread?.thread_id, thread?.status, isRunning, fetchTimeline]);
 
   // Live timer update
   useEffect(() => {
