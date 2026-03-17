@@ -121,7 +121,9 @@ async def list_threads(
                 metadata->>'model'                 AS model,
                 (metadata->>'run_cost_usd')::float AS run_cost_usd,
                 (metadata->>'budget_usd')::float   AS budget_usd,
-                (metadata->>'budget_soft_warned')::boolean AS budget_soft_warned
+                (metadata->>'budget_soft_warned')::boolean AS budget_soft_warned,
+                (metadata->>'rate_limited')::boolean       AS rate_limited,
+                COALESCE((metadata->>'rate_limit_waits')::int, 0) AS rate_limit_waits
             FROM agentfile_checkpoints
             ORDER BY thread_id, step_index DESC
         ) latest
@@ -173,6 +175,8 @@ async def list_threads(
             run_cost_usd=float(r["run_cost_usd"] or 0),
             budget_usd=float(r["budget_usd"] or 0),
             budget_soft_warned=bool(r["budget_soft_warned"]),
+            rate_limited=bool(r["rate_limited"]),
+            rate_limit_waits=int(r["rate_limit_waits"] or 0),
         ))
     return Page(items=result, total=total, limit=limit, offset=offset)
 

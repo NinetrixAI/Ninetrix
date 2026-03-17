@@ -192,6 +192,38 @@ async def ingest_events(
                     log.info("thread status | thread=%s → budget_exceeded (cost=$%.4f / $%.2f)",
                              thread_id, run_cost_usd, budget_usd)
 
+                elif event.type == "thread_rate_limited":
+                    thread_id   = data.get("thread_id", "")
+                    wait_seconds = float(data.get("wait_seconds") or 0)
+                    rate_limit  = data.get("rate_limit", "")
+                    if not thread_id:
+                        continue
+                    extra_meta = json.dumps({
+                        "rate_limited":    True,
+                        "rate_limit_waits": 1,   # incremented via jsonb arithmetic below
+                    })
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET metadata = metadata
+                            || jsonb_build_object(
+                                'rate_limited', true,
+                                'rate_limit_waits',
+                                COALESCE((metadata->>'rate_limit_waits')::int, 0) + 1
+                            )
+                        WHERE (thread_id, step_index) = (
+                            SELECT thread_id, step_index
+                            FROM agentfile_checkpoints
+                            WHERE thread_id = $1
+                            ORDER BY step_index DESC
+                            LIMIT 1
+                        )
+                        """,
+                        thread_id,
+                    )
+                    log.info("rate_limited | thread=%s wait=%.1fs limit=%s",
+                             thread_id, wait_seconds, rate_limit)
+
                 elif event.type == "budget_warning":
                     # Budget warning events are informational — log them.
                     # The cost data is already embedded in checkpoint metadata via the checkpoint event.

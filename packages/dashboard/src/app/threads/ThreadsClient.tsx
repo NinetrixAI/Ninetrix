@@ -1215,6 +1215,19 @@ function TraceDrawer({
                   ⚠ Budget Alert
                 </span>
               )}
+              {thread.rate_limited && (
+                <span
+                  title={`Rate limited ${thread.rate_limit_waits}x during this run`}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 3,
+                    fontSize: 11, fontWeight: 500, color: "#A78BFA",
+                    background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.25)",
+                    borderRadius: 5, padding: "2px 6px",
+                  }}
+                >
+                  ⏱ Rate limited{thread.rate_limit_waits > 1 ? ` (${thread.rate_limit_waits}x)` : ""}
+                </span>
+              )}
               {thread.trigger && <TriggerChip trigger={thread.trigger} />}
             </div>
 

@@ -436,6 +436,11 @@ async def _rate_limit_wait() -> None:
     await asyncio.sleep(_wait)
     _rate_bucket = 0.0
     _rate_refill_at = time.monotonic()
+    _post_runner_event("thread_rate_limited", {
+        "thread_id":   THREAD_ID,
+        "wait_seconds": round(_wait, 2),
+        "rate_limit":  f"{_RATE_MAX} req/{_RATE_PERIOD:.0f}s",
+    })
 
 
 {% include 'includes/_persistence.py.j2' %}

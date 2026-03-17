@@ -71,6 +71,8 @@ class ThreadSummary(BaseModel):
     run_cost_usd: float = 0.0
     budget_usd: float = 0.0
     budget_soft_warned: bool = False
+    rate_limited: bool = False
+    rate_limit_waits: int = 0
 
 
 class ThreadDetail(BaseModel):

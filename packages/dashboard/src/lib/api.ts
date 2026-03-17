@@ -22,6 +22,8 @@ export interface ThreadSummary {
   run_cost_usd: number;
   budget_usd: number;
   budget_soft_warned: boolean;
+  rate_limited: boolean;
+  rate_limit_waits: number;
 }
 
 export interface TimelineEvent {
