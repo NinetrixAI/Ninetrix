@@ -1,0 +1,41 @@
+governance:
+  max_budget_per_run: 0.50           # generous budget so rate-limiting is the constraint
+  rate_limit: 3_requests_per_minute  # only 3 LLM calls allowed per 60 s
+
+agents:
+  rate-limit-demo:
+    metadata:
+      role: Rapid-fire Q&A agent
+      goal: >
+        Answer a quick-fire sequence of questions to demonstrate that the
+        rate_limit governor throttles LLM calls automatically.
+      instructions: |
+        You are a Q&A agent used to demonstrate rate-limit enforcement.
+
+        When the user sends "run", answer each of the following questions
+        one at a time, in order. Use the get_question tool to fetch each
+        question before answering it.
+
+        Questions to answer:
+          1. What is the capital of France?
+          2. What is 17 multiplied by 13?
+          3. Name three famous Renaissance painters.
+          4. What is the boiling point of water in Celsius?
+          5. Who wrote "Pride and Prejudice"?
+          6. What programming language was the Linux kernel written in?
+
+        After each answer print: "Question N answered."
+
+        The run is configured to allow only 3 LLM requests per minute.
+        You will observe automatic throttle delays between questions — that
+        is the rate_limit governor working as intended. Do not try to
+        circumvent the delays; just answer each question when your turn comes.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.0
+
+    tools:
+      - name: rate_limit_tools
+        source: ./tools/rate_limit_tools.py
