@@ -62,7 +62,7 @@ def auth_login(token: str, api_url: str | None) -> None:
     # Verify the token against the live API before saving
     try:
         resp = httpx.get(
-            f"{url}/integrations/credentials",
+            f"{url}/v1/integrations/credentials",
             headers={"Authorization": f"Bearer {token}"},
             timeout=5,
         )
@@ -136,7 +136,7 @@ def auth_status(api_url: str | None) -> None:
     # Connectivity check
     try:
         resp = httpx.get(
-            f"{url}/integrations/credentials",
+            f"{url}/v1/integrations/credentials",
             headers=auth_headers(url),
             timeout=3,
         )

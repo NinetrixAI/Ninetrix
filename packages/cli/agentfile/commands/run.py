@@ -125,7 +125,7 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
         return
     try:
         resp = httpx.get(
-            f"{api_url}/integrations/credentials",
+            f"{api_url}/v1/integrations/credentials",
             headers=auth_headers(api_url),
             timeout=3,
         )

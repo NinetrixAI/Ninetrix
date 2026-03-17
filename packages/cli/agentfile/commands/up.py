@@ -58,7 +58,7 @@ def _fetch_integration_credentials() -> dict[str, str]:
     api_url = os.environ.get("AGENTFILE_API_URL", "http://localhost:8000")
     try:
         resp = httpx.get(
-            f"{api_url}/integrations/credentials",
+            f"{api_url}/v1/integrations/credentials",
             headers=auth_headers(api_url),
             timeout=3,
         )
