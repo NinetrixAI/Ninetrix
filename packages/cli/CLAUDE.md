@@ -157,26 +157,33 @@ Each command lives in `agentfile/commands/`:
 - `run.py` — runs the built image via `subprocess` with interactive TTY; always injects `AGENTFILE_PROVIDER`, `AGENTFILE_MODEL`, `AGENTFILE_TEMPERATURE` as env vars to override baked-in values; also forwards API keys, Composio keys, DB URL, and `AGENTFILE_THREAD_ID`
 - `deploy.py` — wraps build + `docker push` + prints the resulting `docker run` command
 - `mcp.py` — manages MCP tool servers: `list`, `add` (writes to `~/.agentfile/mcp.yaml`), `test` (connects via MCP SDK and prints tool schemas)
+- `migrate.py` — upgrades `agentfile.yaml` to the latest schema version; supports `--dry-run`
 
 ### Core Models (`agentfile/core/models.py`)
 
-`AgentFile` is the root dataclass, parsed from YAML via `AgentFile.from_path()`. Key properties:
+All models use **Pydantic v2 BaseModel** (migrated from dataclasses). `AgentFile` is the root model, parsed from YAML via `AgentFile.from_path()`. Key properties:
 
 - `system_prompt` — assembles the agent persona from `role`, `goal`, `instructions`, `constraints` fields
-- `image_name(tag)` — returns `agentfile/<slug>:<tag>`
+- `image_name(tag)` — returns `ninetrix/<slug>:<tag>`
 - `validate()` — returns a list of error strings (empty = valid); requires at least one tool
+- `schema_version` — tracks YAML schema version (current: `"1.1"`); prints deprecation warning if old/missing
 
 Sub-models:
 
 
-| Dataclass       | Fields                                                                                        |
+| Model           | Fields                                                                                        |
 | --------------- | --------------------------------------------------------------------------------------------- |
 | `Tool`          | `name`, `source`, `actions`; methods `is_mcp()`, `is_composio()`, `mcp_name`, `composio_app`  |
 | `Governance`    | `max_budget_per_run`, `human_approval` (`HumanApproval`), `rate_limit`                        |
-| `HumanApproval` | `enabled`, `actions`                                                                          |
-| `Persistence`   | `provider` (`"postgres"`), `url` (supports `${ENV_VAR}` syntax)                               |
-| `Execution`     | `mode` (`"direct"` | `"planned"`), `verify_steps`, `max_steps`, `on_step_failure`, `verifier` |
+| `HumanApproval` | `enabled`, `actions`, `notify_url`                                                            |
+| `Execution`     | `mode` (`"direct"` | `"planned"`), `verify_steps`, `max_steps`, `on_step_failure`, `verifier`, `thinking`, `durability` |
 | `Verifier`      | `provider`, `model`, `max_tokens` — the LLM used for step verification                        |
+| `ThinkingConfig`| `enabled`, `model`, `provider`, `max_tokens`, `temperature`, `min_input_length`, `prompt`      |
+| `Resources`     | `cpu`, `memory`, `storage`, `base_image`, `warm_pool`                                         |
+| `VolumeSpec`    | `name`, `provider`, `host_path`, `bucket`, `prefix`, `container_path`, `read_only`, `sync`    |
+| `MCPGatewayConfig` | `url`, `token`, `org_id` (alias: `workspace_id` — deprecated)                             |
+
+Sub-models use `frozen=True` for immutability. `Literal` types enforce valid values for enums (`mode`, `type`, `sync`, etc.). `MCPGatewayConfig` uses `populate_by_name=True` for backward-compatible `workspace_id` alias.
 
 
 ### MCP Registry (`agentfile/core/mcp_registry.py`)
@@ -286,53 +293,75 @@ The plan is printed to the terminal before execution begins. If planning fails, 
 ### `agentfile.yaml` Full Schema
 
 ```yaml
-version: "1.0"
+schema_version: "1.1"              # run `ninetrix migrate` to upgrade old files
 
-metadata:
-  name: my-agent          # used for Docker image tag slug
-  description: ...
-  role: ...               # composed into system_prompt
-  goal: ...
-  instructions: |
-    ...
-  constraints:
-    - "..."
+agents:
+  my-agent:
+    metadata:
+      name: my-agent               # used for Docker image tag slug
+      description: ...
+      role: ...                    # composed into system_prompt
+      goal: ...
+      instructions: |
+        ...
+      constraints:
+        - "..."
 
-runtime:
-  provider: anthropic     # anthropic | openai | google | mistral | groq
-  model: claude-sonnet-4-6
-  temperature: 0.2
+    runtime:
+      provider: anthropic          # anthropic | openai | google | mistral | groq
+      model: claude-sonnet-4-6
+      temperature: 0.2
+      max_tokens: 8192             # max output tokens per LLM call
+      max_turns: 20                # safety cap on the agentic loop
+      tool_timeout: 30             # seconds before a tool call is aborted
+      history_window_tokens: 90000 # sliding-window token budget
 
-tools:
-  - name: web_search
-    source: mcp://duckduckgo        # MCP tool — registry key after mcp://
-  - name: github
-    source: composio://GITHUB       # Composio tool — app name after composio://
-  - name: gmail_send
-    source: composio://GMAIL
-    actions:                        # optional: limit to specific Composio actions
-      - GMAIL_SEND_EMAIL
+    tools:
+      - name: web_search
+        source: mcp://duckduckgo        # MCP tool — registry key after mcp://
+      - name: github
+        source: composio://GITHUB       # Composio tool — app name after composio://
+      - name: gmail_send
+        source: composio://GMAIL
+        actions:                        # optional: limit to specific Composio actions
+          - GMAIL_SEND_EMAIL
 
-governance:
-  max_budget_per_run: 1.00
-  human_approval:
-    enabled: true
-    actions: [file_write, shell_exec]   # tool names that require human approval
-  rate_limit: 10_requests_per_minute
+    # Structured output — agent must respond with JSON matching this schema
+    output_type:                        # optional
+      type: object
+      required: [summary, confidence]
+      properties:
+        summary: {type: string}
+        confidence: {type: number, minimum: 0, maximum: 1}
 
-execution:
-  mode: planned                     # "direct" (default) | "planned"
-  verify_steps: true                # call verifier LLM after each tool call
-  max_steps: 10                     # cap on plan size
-  on_step_failure: continue         # "abort" | "continue" | "retry_once"
-  verifier:
-    provider: anthropic             # defaults to agent's provider
-    model: claude-haiku-4-5-20251001   # small/fast model recommended
-    max_tokens: 128
+    governance:
+      max_budget_per_run: 1.00
+      human_approval:
+        enabled: true
+        actions: [file_write, shell_exec]
+      rate_limit: 10_requests_per_minute
 
-persistence:
-  provider: "postgres"
-  url: "${DATABASE_URL}"            # ${VAR} resolved from env at runtime
+    execution:
+      mode: planned                     # "direct" (default) | "planned"
+      verify_steps: true
+      max_steps: 10
+      on_step_failure: continue         # "abort" | "continue" | "retry_once"
+      verifier:
+        provider: anthropic
+        model: claude-haiku-4-5-20251001
+        max_tokens: 128
+
+    persistence:
+      provider: "postgres"
+      url: "${DATABASE_URL}"            # ${VAR} resolved from env at runtime
+
+    # Multi-agent collaboration
+    collaborators: [researcher, writer] # names of other agents in this file
+    transfer_timeout: 300               # seconds before a transfer times out
+    routing:                            # optional — how to pick a collaborator
+      mode: auto                        # "agent" (default, LLM decides via tool) | "auto" (cheap router picks)
+      model: claude-haiku-4-5-20251001  # fast/cheap model for routing
+      provider: anthropic
 
 triggers:
   - type: webhook
@@ -341,25 +370,33 @@ triggers:
 
 ### Key Constants in Generated `entrypoint.py`
 
-- `MAX_TURNS = 20` — safety cap on the agentic tool-use loop
-- `TOOL_TIMEOUT = 30` — seconds before a hanging MCP tool call is aborted
-- `MAX_TOKENS = 8192` — max output tokens per LLM call
-- `HISTORY_WINDOW_CHARS = 100_000` — sliding-window budget (~25k tokens); older messages trimmed before each LLM call
-- `APPROVAL_POLL_INTERVAL = 5` — seconds between human-approval DB polls
-- `APPROVAL_TIMEOUT = 3600` — 1 hour hard timeout for human approval
+All four runtime limits are now **configurable in `agentfile.yaml`** under `runtime:` and overridable via env vars at runtime:
+
+- `MAX_TOKENS` — max output tokens per LLM call (default: 8192, yaml: `runtime.max_tokens`, env: `AGENTFILE_MAX_TOKENS`)
+- `MAX_TURNS` — safety cap on the agentic tool-use loop (default: 20, yaml: `runtime.max_turns`, env: `AGENTFILE_MAX_TURNS`)
+- `TOOL_TIMEOUT` — seconds before a hanging MCP tool call is aborted (default: 30, yaml: `runtime.tool_timeout`, env: `AGENTFILE_TOOL_TIMEOUT`)
+- `HISTORY_WINDOW_TOKENS` — sliding-window token budget for history (default: 90000, yaml: `runtime.history_window_tokens`, env: `AGENTFILE_HISTORY_WINDOW_TOKENS`)
+- `APPROVAL_POLL_INTERVAL = 5` — seconds between human-approval DB polls (not configurable)
+- `APPROVAL_TIMEOUT = 3600` — 1 hour hard timeout for human approval (not configurable)
 
 ### Jinja2 Template Context Variables (passed from `build.py`)
 
 
 | Variable                   | Type        | Purpose                                        |
 | -------------------------- | ----------- | ---------------------------------------------- |
-| `agent`                    | `AgentFile` | Full agent config object                       |
+| `agent`                    | `AgentDef`  | Agent config (with effective governance/triggers merged) |
 | `use_mcp_gateway`          | bool        | True if agent has any `mcp://` tools           |
 | `mcp_gateway_url`          | str         | Gateway base URL (baked in from yaml or empty) |
 | `mcp_gateway_token`        | str         | Bearer token (baked in from yaml or empty)     |
-| `mcp_gateway_workspace`    | str         | Workspace ID (default: `"default"`)            |
+| `mcp_gateway_org_id`       | str         | Organization ID (default: `"default"`)         |
 | `has_composio_tools`       | bool        | Enable Composio integration                    |
 | `composio_tool_defs`       | list        | `[{app, actions}]`                             |
+| `has_output_type`          | bool        | Enable structured JSON output validation       |
+| `output_type_schema`       | str         | JSON string of the output schema               |
+| `max_tokens`               | int         | Max output tokens per LLM call (from yaml)     |
+| `max_turns`                | int         | Agentic loop safety cap (from yaml)            |
+| `tool_timeout`             | int         | MCP tool call timeout in seconds (from yaml)   |
+| `history_window_tokens`    | int         | Sliding-window token budget (from yaml)        |
 | `has_persistence`          | bool        | Enable StateStore / Checkpointer               |
 | `persistence_provider`     | str         | e.g. `"postgres"`                              |
 | `persistence_url_template` | str         | Raw URL with `${VAR}` placeholders             |
@@ -371,6 +408,12 @@ triggers:
 | `verifier_provider`        | str         | Provider for verifier LLM                      |
 | `verifier_model`           | str         | Model for verifier LLM                         |
 | `verifier_max_tokens`      | int         | Max tokens for verifier response               |
+| `has_collaborators`        | bool        | Agent has collaborator agents                  |
+| `collaborators`            | list[str]   | Names of collaborator agents                   |
+| `has_auto_routing`         | bool        | Use cheap LLM router instead of agent tool     |
+| `routing_model`            | str         | Model for auto-router (default: haiku)         |
+| `routing_provider`         | str         | Provider for auto-router                       |
+| `transfer_timeout`         | int         | Collaborator transfer timeout in seconds       |
 
 
 ### Human-in-the-Loop (HITL)
@@ -439,7 +482,10 @@ All values below are read at container startup — **no rebuild needed**. Set th
 
 | Env var | Default | What it controls |
 |---|---|---|
-| `AGENTFILE_MAX_TURNS` | `20` | Safety cap on the agentic tool-use loop |
+| `AGENTFILE_MAX_TOKENS` | from yaml (8192) | Max output tokens per LLM call |
+| `AGENTFILE_MAX_TURNS` | from yaml (20) | Safety cap on the agentic tool-use loop |
+| `AGENTFILE_TOOL_TIMEOUT` | from yaml (30) | Seconds before a hanging tool call is aborted |
+| `AGENTFILE_HISTORY_WINDOW_TOKENS` | from yaml (90000) | Token budget for sliding history window |
 | `AGENTFILE_MAX_PLAN_STEPS` | from yaml | Max steps in planned execution |
 | `AGENTFILE_VERIFY_STEPS` | from yaml | `true`/`false` — enable step verification |
 | `AGENTFILE_ON_STEP_FAILURE` | from yaml | `abort` / `continue` / `retry_once` |
