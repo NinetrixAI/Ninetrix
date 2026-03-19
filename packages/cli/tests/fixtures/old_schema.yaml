@@ -1,0 +1,16 @@
+version: "1.0"
+
+agents:
+  legacy-agent:
+    metadata:
+      description: "Agent with old schema"
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+    tools:
+      - name: search
+        source: mcp://brave-search
+
+mcp_gateway:
+  url: "http://localhost:8080"
+  workspace_id: "old-workspace"

@@ -34,3 +34,17 @@ include = ["agentfile*"]
 "agentfile.templates" = ["*.j2", "*.yaml", "includes/*.j2"]
 "agentfile.core" = ["*.json"]
 "agentfile.compose" = ["*.yml", "*.yaml"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests (slower, real I/O)",
+]
+filterwarnings = ["ignore::DeprecationWarning"]

@@ -1,0 +1,22 @@
+schema_version: "1.1"
+
+agents:
+  test-agent:
+    metadata:
+      description: "A minimal test agent"
+      role: "test assistant"
+      goal: "answer questions"
+      instructions: "Be helpful."
+      constraints:
+        - "Be concise"
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.2
+      max_tokens: 4096
+      max_turns: 10
+      tool_timeout: 15
+      history_window_tokens: 50000
+    tools:
+      - name: web_search
+        source: mcp://brave-search

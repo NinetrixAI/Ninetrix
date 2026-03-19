@@ -1,0 +1,105 @@
+schema_version: "1.1"
+
+agents:
+  main-agent:
+    metadata:
+      description: "Full-featured test agent"
+      role: "analyst"
+      goal: "analyze data"
+      instructions: |
+        Analyze the data thoroughly.
+        Provide structured output.
+      constraints:
+        - "Be accurate"
+        - "Cite sources"
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.5
+      max_tokens: 16384
+      max_turns: 30
+      tool_timeout: 60
+      history_window_tokens: 100000
+      resources:
+        cpu: 2.0
+        memory: "4Gi"
+        base_image: "python:3.12-slim"
+    tools:
+      - name: web_search
+        source: mcp://brave-search
+      - name: github
+        source: composio://GITHUB
+        actions:
+          - GITHUB_LIST_REPOS
+          - GITHUB_CREATE_ISSUE
+    governance:
+      max_budget_per_run: 5.0
+      human_approval:
+        enabled: true
+        actions: [GITHUB_CREATE_ISSUE]
+      rate_limit: 20_requests_per_minute
+    execution:
+      mode: planned
+      verify_steps: true
+      max_steps: 15
+      on_step_failure: retry_once
+      verifier:
+        provider: anthropic
+        model: claude-haiku-4-5-20251001
+        max_tokens: 256
+      thinking:
+        enabled: true
+        model: claude-sonnet-4-6
+        max_tokens: 4096
+        temperature: 0.1
+        min_input_length: 100
+        prompt: "Think step by step."
+    triggers:
+      - type: webhook
+        endpoint: /analyze
+        port: 9100
+      - type: schedule
+        cron: "0 */6 * * *"
+        message: "Run scheduled analysis"
+    output_type:
+      type: object
+      required: [summary, confidence]
+      properties:
+        summary:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+volumes:
+  data-vol:
+    provider: local
+    host_path: /tmp/test-data
+    container_path: /data
+    read_only: true
+
+  s3-vol:
+    provider: s3
+    bucket: "${MY_BUCKET}"
+    prefix: "agent-output/"
+    container_path: /output
+    sync: upload-only
+
+environments:
+  prod:
+    agents:
+      main-agent:
+        runtime:
+          model: claude-sonnet-4-6
+          temperature: 0.1
+  staging:
+    agents:
+      main-agent:
+        runtime:
+          temperature: 0.3
+
+mcp_gateway:
+  url: "http://localhost:8080"
+  token: "test-token"
+  org_id: "test-org"
