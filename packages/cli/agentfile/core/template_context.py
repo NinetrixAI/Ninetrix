@@ -48,6 +48,8 @@ if _PYDANTIC_AVAILABLE:
         agent_name: str = ""
         collaborators: list = []
         has_collaborators: bool = False
+        has_output_type: bool = False
+        output_type_schema: str = ""
         max_tokens: int = 8192
         max_turns: int = 20
         tool_timeout: int = 30
@@ -190,8 +192,14 @@ def build_context(
                 if _warn:
                     _warn(f"Local tool discovery failed: {_exc}")
 
+    import json as _json
+    has_output_type = agent_def.output_type is not None
+    output_type_schema = _json.dumps(agent_def.output_type) if has_output_type else ""
+
     result = {
         "agent":                      agent,
+        "has_output_type":            has_output_type,
+        "output_type_schema":         output_type_schema,
         "has_composio_tools":         has_composio_tools,
         "composio_tool_defs":         composio_tool_defs,
         "has_planned_execution":      exec_obj.mode == "planned",

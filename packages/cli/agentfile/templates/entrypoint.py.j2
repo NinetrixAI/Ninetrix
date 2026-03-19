@@ -88,6 +88,38 @@ _VOLUME_CONTEXT = (
 )
 SYSTEM_PROMPT = (SYSTEM_PROMPT + _VOLUME_CONTEXT) if SYSTEM_PROMPT else _VOLUME_CONTEXT.strip()
 {% endif %}
+{% if has_output_type %}
+# ── Structured output ────────────────────────────────────────────────────────
+_OUTPUT_SCHEMA = json.loads({{ output_type_schema | tojson }})
+_OUTPUT_INSTRUCTION = (
+    "\n\nIMPORTANT: Your final response MUST be valid JSON matching this schema:\n"
+    + json.dumps(_OUTPUT_SCHEMA, indent=2)
+    + "\n\nRespond ONLY with the JSON object, no markdown fences or extra text."
+)
+SYSTEM_PROMPT = (SYSTEM_PROMPT + _OUTPUT_INSTRUCTION) if SYSTEM_PROMPT else _OUTPUT_INSTRUCTION.strip()
+
+def _validate_output(text: str) -> dict:
+    """Parse and validate the LLM output against the output_type schema.
+    Returns the parsed dict on success, raises ValueError on failure."""
+    # Strip markdown fences if present
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
+    # Extract JSON object
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1:
+        raise ValueError(f"No JSON object found in output: {cleaned[:200]}")
+    parsed = json.loads(cleaned[start:end+1])
+    # Validate required fields
+    required = _OUTPUT_SCHEMA.get("required", [])
+    missing = [f for f in required if f not in parsed]
+    if missing:
+        raise ValueError(f"Missing required fields: {missing}")
+    return parsed
+{% endif %}
 
 # ── Durable run identity ──────────────────────────────────────────────────────
 # THREAD_ID is stable across restarts (injected by `ninetrix run/up` when

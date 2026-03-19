@@ -77,11 +77,43 @@ async def _run_turn(
             saas_cp.step(messages, "in_progress", in_tok=_scp_in, out_tok=_scp_out)
 
         if choice.finish_reason in ("stop", "end_turn") or not msg.tool_calls:
+{% if has_output_type %}
+            # Structured output: validate JSON against output_type schema
+            if msg.content:
+                try:
+                    _validated = _validate_output(msg.content)
+                    # Replace raw text with clean JSON for downstream consumers
+                    _clean_json = json.dumps(_validated)
+                    if result_collector is not None:
+                        result_collector.append(_clean_json)
+                    else:
+                        _console.print(_clean_json, markup=False, highlight=False)
+                except (json.JSONDecodeError, ValueError) as _parse_err:
+                    if _turn < MAX_TURNS - 1 and not getattr(_run_turn, "_output_retried", False):
+                        _run_turn._output_retried = True
+                        print(f"[output] Validation failed: {_parse_err} — retrying", file=sys.stderr, flush=True)
+                        messages.append({"role": "assistant", "content": msg.content})
+                        messages.append({"role": "user", "content":
+                            f"Your response was not valid JSON matching the required schema. "
+                            f"Error: {_parse_err}\n\nPlease respond ONLY with the JSON object."
+                        })
+                        if saas_cp is not None:
+                            saas_cp.record("assistant")
+                            saas_cp.record("user")
+                        continue
+                    else:
+                        # Give up — return raw content
+                        if result_collector is not None:
+                            result_collector.append(msg.content)
+                        else:
+                            _console.print(msg.content, markup=False, highlight=False)
+{% else %}
             if msg.content:
                 if result_collector is not None:
                     result_collector.append(msg.content)
                 else:
                     _console.print(msg.content, markup=False, highlight=False)
+{% endif %}
 {% if has_planned_execution %}
             # Plan mode: if no tool was called, the LLM may be mid-execution
             # (wrote intermediate text instead of calling the next tool).

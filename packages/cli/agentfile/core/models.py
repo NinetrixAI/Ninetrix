@@ -194,6 +194,7 @@ class AgentDef(BaseModel):
     max_turns: int = 20
     tool_timeout: int = 30
     history_window_tokens: int = 90_000
+    output_type: Optional[dict[str, Any]] = None
     tools: list[Tool] = Field(default_factory=list)
     governance: Optional[Governance] = None
     triggers: list[Trigger] = Field(default_factory=list)
@@ -317,6 +318,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         max_turns=int(runtime.get("max_turns", 20)),
         tool_timeout=int(runtime.get("tool_timeout", 30)),
         history_window_tokens=int(runtime.get("history_window_tokens", 90_000)),
+        output_type=araw.get("output_type"),
         tools=[Tool(**t) for t in (araw.get("tools") or [])],
         governance=_parse_governance(araw["governance"]) if araw.get("governance") else None,
         triggers=[Trigger(**t) for t in (araw.get("triggers") or [])],

@@ -161,6 +161,16 @@
             }
           },
 
+          "output_type": {
+            "type": "object",
+            "description": "JSON Schema defining the agent's structured output format. When set, the agent's final response must be valid JSON matching this schema. The schema is appended to the system prompt and the output is validated + retried once on failure.",
+            "properties": {
+              "type":       { "type": "string" },
+              "required":   { "type": "array", "items": { "type": "string" } },
+              "properties": { "type": "object" }
+            }
+          },
+
           "tools": {
             "type": "array",
             "description": "Tools the agent can call. At least one is required.",
