@@ -326,10 +326,14 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
 
 # ── Root model ─────────────────────────────────────────────────────────────────
 
+LATEST_SCHEMA_VERSION = "1.1"
+
+
 class AgentFile(BaseModel):
     """Root model — always uses agents: map (single or multi)."""
     model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
 
+    schema_version: str = "1.0"
     agents: dict[str, AgentDef]
     governance: Governance
     triggers: list[Trigger] = Field(default_factory=list)
@@ -355,6 +359,16 @@ class AgentFile(BaseModel):
 
         if not isinstance(data, dict):
             raise ValueError("Agentfile must be a YAML mapping at the root level.")
+
+        # Deprecation warning for old/missing schema_version
+        version = str(data.get("schema_version") or data.get("version") or "1.0")
+        if version != LATEST_SCHEMA_VERSION:
+            print(
+                f"WARNING: agentfile.yaml schema_version is '{version}' "
+                f"(latest: '{LATEST_SCHEMA_VERSION}'). "
+                f"Run 'ninetrix migrate' to upgrade.",
+                file=sys.stderr,
+            )
 
         return cls._parse(data)
 
@@ -386,7 +400,9 @@ class AgentFile(BaseModel):
             mcp_gateway = MCPGatewayConfig(**gw_data)
 
         global_exec_raw = data.get("execution")
+        schema_version = str(data.get("schema_version") or data.get("version") or "1.0")
         return cls(
+            schema_version=schema_version,
             agents=agents,
             governance=_parse_governance(data.get("governance") or {}),
             triggers=[Trigger(**t) for t in (data.get("triggers") or [])],

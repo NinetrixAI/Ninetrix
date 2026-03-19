@@ -7,9 +7,15 @@
   "additionalProperties": false,
   "properties": {
 
+    "schema_version": {
+      "type": "string",
+      "description": "Agentfile schema version. Current: '1.1'. Run 'ninetrix migrate' to upgrade."
+    },
+
     "version": {
       "type": "string",
-      "description": "Agentfile schema version (for human reference only)"
+      "description": "Deprecated — use schema_version instead.",
+      "deprecated": true
     },
 
     "governance": {
