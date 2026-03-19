@@ -435,7 +435,8 @@
       "properties": {
         "url":          { "type": "string", "minLength": 1, "description": "HTTP(S) base URL of the MCP Gateway (e.g. https://mcp.ninetrix.io). Supports ${ENV_VAR} syntax." },
         "token":        { "type": "string", "description": "Bearer token for gateway authentication. Use ${MCP_GATEWAY_TOKEN} to avoid hard-coding secrets." },
-        "workspace_id": { "type": "string", "description": "Workspace to scope tool access. Defaults to 'default'." }
+        "org_id":        { "type": "string", "description": "Organization ID to scope tool access. Defaults to 'default'." },
+        "workspace_id":  { "type": "string", "description": "Deprecated — use org_id instead.", "deprecated": true }
       }
     },
 

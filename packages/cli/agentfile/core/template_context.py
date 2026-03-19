@@ -7,7 +7,6 @@ Used by both:
 
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 from typing import Any, Callable
 
@@ -87,11 +86,10 @@ def build_context(
     eff_governance  = af.effective_governance(agent_def)
     eff_triggers    = af.effective_triggers(agent_def)
 
-    agent = dataclasses.replace(
-        agent_def,
-        governance=eff_governance,
-        triggers=eff_triggers,
-    )
+    agent = agent_def.model_copy(update={
+        "governance": eff_governance,
+        "triggers": eff_triggers,
+    })
 
     # Gateway mode: agents call one HTTP endpoint instead of spawning local MCP processes
     mcp_gateway    = getattr(af, "mcp_gateway", None)

@@ -1,13 +1,20 @@
-"""AgentFile data model and YAML parser."""
+"""AgentFile data model and YAML parser.
+
+All models use Pydantic v2 BaseModel for validation, serialisation, and
+JSON Schema generation.  The YAML → model reshaping (metadata/runtime nesting)
+is handled by classmethod factories (_parse / _parse_agent_def), not by Pydantic
+validators, so that consumers see a flat, ergonomic API.
+"""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Literal, Optional, Union
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Deep merge helper ─────────────────────────────────────────────────────────
@@ -46,38 +53,15 @@ def _parse_memory(s: str) -> int:
         return int(float(s[:-1]) * 10 ** 3)
     return int(s)
 
-# ── JSON Schema (loaded once at import time) ───────────────────────────────────
-_SCHEMA: dict = json.loads((Path(__file__).parent / "schema.json").read_text())
-
-
-def _schema_errors(data: dict) -> list[str]:
-    """Validate *data* against the agentfile JSON Schema. Returns formatted error strings."""
-    try:
-        import jsonschema
-    except ImportError:
-        return []  # graceful degradation if package is missing
-
-    validator = jsonschema.Draft7Validator(_SCHEMA)
-    errors = []
-    for err in sorted(validator.iter_errors(data), key=lambda e: list(e.absolute_path)):
-        parts: list[str] = []
-        for segment in err.absolute_path:
-            if isinstance(segment, int):
-                parts.append(f"[{segment}]")
-            else:
-                parts.append(f".{segment}" if parts else segment)
-        path = "".join(parts) or "(root)"
-        errors.append(f"{path}: {err.message}")
-    return errors
-
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
-@dataclass
-class Tool:
+class Tool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str
     source: str
-    actions: list[str] = field(default_factory=list)  # Composio: optional action filter
+    actions: list[str] = Field(default_factory=list)
 
     def is_mcp(self) -> bool:
         return self.source.startswith("mcp://")
@@ -103,111 +87,121 @@ class Tool:
         return self.source[len("composio://"):]
 
 
-@dataclass
-class HumanApproval:
+class HumanApproval(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     enabled: bool = True
-    actions: list[str] = field(default_factory=list)
-    notify_url: str = ""  # webhook POSTed when a tool needs human approval
+    actions: list[str] = Field(default_factory=list)
+    notify_url: str = ""
 
 
-@dataclass
-class Governance:
+class Governance(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     max_budget_per_run: float = 1.0
-    budget_warning_usd: float = 0.0  # soft warning threshold — logs + event only, no exit
-    human_approval: HumanApproval = field(default_factory=HumanApproval)
+    budget_warning_usd: float = 0.0
+    human_approval: HumanApproval = Field(default_factory=HumanApproval)
     rate_limit: str = "10_requests_per_minute"
 
 
-@dataclass
-class Trigger:
-    type: str                       # "webhook" | "schedule"
+class Trigger(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["webhook", "schedule"]
     endpoint: Optional[str] = None
     cron: Optional[str] = None
-    port: int = 9100                # webhook listen port
-    message: str = ""               # schedule: message injected each fire
-    target_agent: Optional[str] = None  # multi-agent: which agent gets this trigger
+    port: int = 9100
+    message: str = ""
+    target_agent: Optional[str] = None
 
 
-@dataclass
-class Verifier:
-    provider: str = ""   # defaults to agent's provider when empty
-    model: str = ""      # defaults to agent's model when empty
+class Verifier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str = ""
+    model: str = ""
     max_tokens: int = 128
 
 
-@dataclass
-class ThinkingConfig:
+class ThinkingConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     enabled: bool = False
-    model: str = ""       # defaults to agent's model when empty
-    provider: str = ""    # defaults to agent's provider when empty
+    model: str = ""
+    provider: str = ""
     max_tokens: int = 2048
-    temperature: float = 0.1   # analytical reasoning works best at low temp
-    min_input_length: int = 50  # skip thinking for inputs shorter than this
-    prompt: str = ""      # optional custom thinking instruction
+    temperature: float = 0.1
+    min_input_length: int = 50
+    prompt: str = ""
 
 
-@dataclass
-class Execution:
-    mode: str = "direct"               # "direct" | "planned"
+class Execution(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: Literal["direct", "planned"] = "direct"
     verify_steps: bool = False
     max_steps: int = 10
-    on_step_failure: str = "continue"  # "abort" | "continue" | "retry_once"
-    verifier: Verifier = field(default_factory=Verifier)
-    thinking: ThinkingConfig = field(default_factory=ThinkingConfig)
-    durability: bool = True            # crash-safe: auto-restart + resume from last checkpoint
+    on_step_failure: Literal["abort", "continue", "retry_once"] = "continue"
+    verifier: Verifier = Field(default_factory=Verifier)
+    thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)
+    durability: bool = True
 
 
-@dataclass
-class Resources:
-    cpu: Optional[float] = None        # --cpus for docker run
-    memory: Optional[str] = None       # --memory (e.g. "4Gi", "512Mi")
-    storage: Optional[str] = None      # label only — no runtime enforcement yet
-    base_image: Optional[str] = None   # overrides FROM in Dockerfile
-    warm_pool: bool = False            # if True: no --rm in ninetrix run
+class Resources(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    cpu: Optional[float] = None
+    memory: Optional[str] = None
+    storage: Optional[str] = None
+    base_image: Optional[str] = None
+    warm_pool: bool = False
 
 
-@dataclass
-class VolumeSpec:
+class VolumeSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: str = ""
-    provider: str = "local"            # "local" | "s3"
-    host_path: Optional[str] = None    # local provider: host path to bind-mount
-    bucket: Optional[str] = None       # s3 provider: bucket name
-    prefix: str = ""                   # s3 provider: key prefix
+    provider: Literal["local", "s3"] = "local"
+    host_path: Optional[str] = None
+    bucket: Optional[str] = None
+    prefix: str = ""
     container_path: str = "/workspace"
     read_only: bool = False
-    sync: str = "bidirectional"        # "download-only" | "upload-only" | "bidirectional"
+    sync: Literal["bidirectional", "download-only", "upload-only"] = "bidirectional"
 
 
-@dataclass
-class MCPGatewayConfig:
+class MCPGatewayConfig(BaseModel):
     """Points agents at a remote MCP Gateway instead of spawning local MCP servers."""
-    url: str                          # HTTP(S) URL of the gateway (e.g. https://mcp.ninetrix.io)
-    token: str = ""                   # Organization token — Bearer auth header
-    org_id: str = "default"           # Organization to scope tool access
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    url: str
+    token: str = ""
+    org_id: str = Field(default="default", alias="workspace_id")
 
 
 # ── Agent definition ──────────────────────────────────────────────────────────
 
-@dataclass
-class AgentDef:
+class AgentDef(BaseModel):
     """One agent entry under agents: in agentfile.yaml."""
-    name: str                                        # key from agents: dict
+    model_config = ConfigDict(frozen=False)
+
+    name: str
     description: str = ""
     model: str = "claude-sonnet-4-6"
     provider: str = "anthropic"
     temperature: float = 0.2
-    tools: list[Tool] = field(default_factory=list)
-    governance: Optional[Governance] = None          # overrides global if set
-    triggers: list[Trigger] = field(default_factory=list)
+    tools: list[Tool] = Field(default_factory=list)
+    governance: Optional[Governance] = None
+    triggers: list[Trigger] = Field(default_factory=list)
     role: str = ""
     goal: str = ""
     instructions: str = ""
-    constraints: list[str] = field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
     execution: Optional[Execution] = None
-    collaborators: list[str] = field(default_factory=list)
-    resources: Resources = field(default_factory=Resources)
-    volume_refs: list = field(default_factory=list)  # list[str | VolumeSpec]
-    serve: bool = False   # keep running and accept /invoke HTTP requests (no triggers needed)
+    collaborators: list[str] = Field(default_factory=list)
+    resources: Resources = Field(default_factory=Resources)
+    volume_refs: list[Union[str, VolumeSpec]] = Field(default_factory=list)
+    serve: bool = False
 
     def image_name(self, tag: str = "latest") -> str:
         slug = self.name.lower().replace(" ", "-")
@@ -236,14 +230,8 @@ class AgentDef:
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
-
-def _parse_tool(t: dict) -> Tool:
-    return Tool(
-        name=t["name"],
-        source=t["source"],
-        actions=list(t.get("actions") or []),
-    )
-
+# These reshape the YAML's nested structure (metadata/runtime) into the flat
+# model fields.  Pydantic handles type coercion and validation from here.
 
 def _parse_governance(gov_raw: dict) -> Governance:
     ha_raw = gov_raw.get("human_approval") or {}
@@ -256,17 +244,6 @@ def _parse_governance(gov_raw: dict) -> Governance:
             notify_url=str(ha_raw.get("notify_url", "") or ""),
         ),
         rate_limit=str(gov_raw.get("rate_limit", "10_requests_per_minute")),
-    )
-
-
-def _parse_trigger(t: dict) -> Trigger:
-    return Trigger(
-        type=t["type"],
-        endpoint=t.get("endpoint"),
-        cron=t.get("cron"),
-        port=int(t.get("port", 9100)),
-        message=str(t.get("message", "") or ""),
-        target_agent=t.get("target_agent"),
     )
 
 
@@ -302,50 +279,29 @@ def _parse_execution(exec_raw: dict) -> Execution:
     )
 
 
-def _parse_resources(raw: dict) -> Resources:
-    return Resources(
-        cpu=float(raw["cpu"]) if "cpu" in raw else None,
-        memory=str(raw["memory"]) if "memory" in raw else None,
-        storage=str(raw["storage"]) if "storage" in raw else None,
-        base_image=str(raw["base_image"]) if "base_image" in raw else None,
-        warm_pool=bool(raw.get("warm_pool", False)),
-    )
-
-
-def _parse_volume_spec(raw: dict, name: str = "") -> VolumeSpec:
-    return VolumeSpec(
-        name=str(raw.get("name", name) or name),
-        provider=str(raw.get("provider", "local")),
-        host_path=raw.get("host_path"),
-        bucket=raw.get("bucket"),
-        prefix=str(raw.get("prefix", "") or ""),
-        container_path=str(raw.get("container_path", "/workspace")),
-        read_only=bool(raw.get("read_only", False)),
-        sync=str(raw.get("sync", "bidirectional")),
-    )
-
-
-def _parse_mcp_gateway(raw: dict | None) -> Optional[MCPGatewayConfig]:
-    if not raw:
-        return None
-    return MCPGatewayConfig(
-        url=str(raw["url"]),
-        token=str(raw.get("token", "") or ""),
-        org_id=str(raw.get("org_id", raw.get("workspace_id", "default")) or "default"),
-    )
-
-
 def _parse_agent_def(key: str, araw: dict) -> AgentDef:
-    """Parse one entry under the agents: dict."""
+    """Parse one entry under the agents: dict.
+
+    Reshapes metadata/runtime nesting into flat AgentDef fields.
+    """
     meta = araw.get("metadata") or {}
     runtime = araw.get("runtime") or {}
 
-    volume_refs: list = []
+    volume_refs: list[Union[str, VolumeSpec]] = []
     for v in (araw.get("volumes") or []):
         if isinstance(v, str):
             volume_refs.append(v)
         elif isinstance(v, dict):
-            volume_refs.append(_parse_volume_spec(v, name=str(v.get("name", ""))))
+            volume_refs.append(VolumeSpec(
+                name=str(v.get("name", "") or ""),
+                provider=str(v.get("provider", "local")),
+                host_path=v.get("host_path"),
+                bucket=v.get("bucket"),
+                prefix=str(v.get("prefix", "") or ""),
+                container_path=str(v.get("container_path", "/workspace")),
+                read_only=bool(v.get("read_only", False)),
+                sync=str(v.get("sync", "bidirectional")),
+            ))
 
     return AgentDef(
         name=key,
@@ -353,16 +309,16 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         model=str(runtime.get("model", "claude-sonnet-4-6")),
         provider=str(runtime.get("provider", "anthropic")),
         temperature=float(runtime.get("temperature", 0.2)),
-        tools=[_parse_tool(t) for t in (araw.get("tools") or [])],
+        tools=[Tool(**t) for t in (araw.get("tools") or [])],
         governance=_parse_governance(araw["governance"]) if araw.get("governance") else None,
-        triggers=[_parse_trigger(t) for t in (araw.get("triggers") or [])],
+        triggers=[Trigger(**t) for t in (araw.get("triggers") or [])],
         role=str(meta.get("role", "") or ""),
         goal=str(meta.get("goal", "") or ""),
         instructions=str(meta.get("instructions", "") or ""),
         constraints=list(meta.get("constraints") or []),
         execution=_parse_execution(araw["execution"]) if "execution" in araw else None,
         collaborators=list(araw.get("collaborators") or []),
-        resources=_parse_resources(runtime.get("resources") or {}),
+        resources=Resources(**(runtime.get("resources") or {})),
         volume_refs=volume_refs,
         serve=bool(araw.get("serve", False)),
     )
@@ -370,17 +326,18 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
 
 # ── Root model ─────────────────────────────────────────────────────────────────
 
-@dataclass
-class AgentFile:
+class AgentFile(BaseModel):
     """Root model — always uses agents: map (single or multi)."""
-    agents: dict[str, AgentDef]         # ordered; first declared = entry point
-    governance: Governance              # global default
-    triggers: list[Trigger]             # global triggers
-    execution: Optional[Execution] = None                         # global default
-    volumes: dict[str, VolumeSpec] = field(default_factory=dict)  # named shared volumes
-    environments: dict = field(default_factory=dict)              # env overlay definitions
-    mcp_gateway: Optional[MCPGatewayConfig] = None               # remote MCP Gateway config
-    _raw: dict = field(default_factory=dict, repr=False, compare=False)  # original parsed dict
+    model_config = ConfigDict(frozen=False, arbitrary_types_allowed=True)
+
+    agents: dict[str, AgentDef]
+    governance: Governance
+    triggers: list[Trigger] = Field(default_factory=list)
+    execution: Optional[Execution] = None
+    volumes: dict[str, VolumeSpec] = Field(default_factory=dict)
+    environments: dict[str, Any] = Field(default_factory=dict)
+    mcp_gateway: Optional[MCPGatewayConfig] = None
+    raw: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
 
     # ── Factory ──────────────────────────────────────────────────────────────
 
@@ -394,17 +351,12 @@ class AgentFile:
             raise ValueError(f"Agentfile must be a .yaml file, got: {p.suffix}")
 
         with p.open() as fh:
-            raw = yaml.safe_load(fh)
+            data = yaml.safe_load(fh)
 
-        if not isinstance(raw, dict):
+        if not isinstance(data, dict):
             raise ValueError("Agentfile must be a YAML mapping at the root level.")
 
-        schema_errs = _schema_errors(raw)
-        if schema_errs:
-            lines = "\n".join(f"  • {e}" for e in schema_errs)
-            raise ValueError(f"agentfile.yaml schema errors:\n{lines}")
-
-        return cls._parse(raw)
+        return cls._parse(data)
 
     @classmethod
     def _parse(cls, data: dict) -> "AgentFile":
@@ -413,21 +365,36 @@ class AgentFile:
         for key, araw in agents_raw.items():
             agents[key] = _parse_agent_def(key, araw or {})
 
-        volumes: dict[str, VolumeSpec] = {
-            k: _parse_volume_spec(v, name=k)
-            for k, v in (data.get("volumes") or {}).items()
-        }
+        volumes: dict[str, VolumeSpec] = {}
+        for k, v in (data.get("volumes") or {}).items():
+            vol_data = dict(v)
+            vol_data.setdefault("name", k)
+            volumes[k] = VolumeSpec(**vol_data)
+
+        mcp_gw_raw = data.get("mcp_gateway")
+        mcp_gateway = None
+        if mcp_gw_raw:
+            # Support both org_id and deprecated workspace_id
+            gw_data = dict(mcp_gw_raw)
+            if "workspace_id" in gw_data and "org_id" not in gw_data:
+                print(
+                    "WARNING: mcp_gateway.workspace_id is deprecated, "
+                    "use mcp_gateway.org_id instead.",
+                    file=sys.stderr,
+                )
+                gw_data["org_id"] = gw_data.pop("workspace_id")
+            mcp_gateway = MCPGatewayConfig(**gw_data)
 
         global_exec_raw = data.get("execution")
         return cls(
             agents=agents,
             governance=_parse_governance(data.get("governance") or {}),
-            triggers=[_parse_trigger(t) for t in (data.get("triggers") or [])],
+            triggers=[Trigger(**t) for t in (data.get("triggers") or [])],
             execution=_parse_execution(global_exec_raw) if global_exec_raw is not None else None,
             volumes=volumes,
             environments=dict(data.get("environments") or {}),
-            mcp_gateway=_parse_mcp_gateway(data.get("mcp_gateway")),
-            _raw=data,
+            mcp_gateway=mcp_gateway,
+            raw=data,
         )
 
     def for_env(self, env: str | None) -> "AgentFile":
@@ -441,7 +408,7 @@ class AgentFile:
         """
         if not env or env not in self.environments:
             return self
-        merged = _deep_merge(self._raw, self.environments[env])
+        merged = _deep_merge(self.raw, self.environments[env])
         merged.pop("environments", None)  # prevent recursive application
         return AgentFile._parse(merged)
 
@@ -503,8 +470,11 @@ class AgentFile:
 
     # ── Validation ────────────────────────────────────────────────────────────
 
-    def validate(self) -> list[str]:
-        """Return a list of validation error strings (empty = valid)."""
+    def validate_config(self) -> list[str]:
+        """Return a list of validation error strings (empty = valid).
+
+        Named validate_config() to avoid shadowing Pydantic's validate().
+        """
         errors: list[str] = []
 
         if not self.agents:
@@ -601,3 +571,8 @@ class AgentFile:
                     )
 
         return errors
+
+    # Keep backward-compatible alias
+    def validate(self) -> list[str]:  # type: ignore[override]
+        """Backward-compatible alias for validate_config()."""
+        return self.validate_config()
