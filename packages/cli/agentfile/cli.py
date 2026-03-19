@@ -33,6 +33,7 @@ from agentfile.commands.env import env_cmd
 from agentfile.commands.ls import ls_cmd
 from agentfile.commands.connect import connect_cmd, disconnect_cmd, connections_cmd
 from agentfile.commands.migrate import migrate_cmd
+from agentfile.commands.schema import schema_cmd
 
 console = Console()
 
@@ -130,6 +131,7 @@ cli.add_command(connections_cmd, name="connections")
 cli.add_command(connect_cmd,     name="connect")
 cli.add_command(disconnect_cmd,  name="disconnect")
 cli.add_command(migrate_cmd,     name="migrate")
+cli.add_command(schema_cmd,      name="schema")
 
 
 def main() -> None:

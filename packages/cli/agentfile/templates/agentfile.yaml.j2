@@ -1,5 +1,7 @@
 # yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
 # docs: https://docs.ninetrix.io
+schema_version: "1.1"
+
 governance:
   max_budget_per_run: 1.00
   human_approval:
@@ -35,6 +37,10 @@ agents:
       provider: {{ provider }}
       model: {{ model }}
       temperature: {{ temperature }}
+      # max_tokens: 8192             # max output tokens per LLM call
+      # max_turns: 20                # safety cap on agentic loop iterations
+      # tool_timeout: 30             # seconds before a tool call is aborted
+      # history_window_tokens: 90000 # sliding-window token budget
     tools:
       - name: web_search
         source: mcp://duckduckgo
@@ -47,6 +53,15 @@ agents:
     #   actions:             # optional: limit to specific actions
     #     - GMAIL_SEND_EMAIL
     collaborators: []
+    # transfer_timeout: 300          # seconds before a collaborator transfer times out
+    # routing:                       # how to route to collaborators
+    #   mode: agent                  # "agent" (LLM decides) | "auto" (cheap router picks)
+    #   model: claude-haiku-4-5-20251001
+    # output_type:                   # structured JSON output (optional)
+    #   type: object
+    #   required: [answer]
+    #   properties:
+    #     answer: {type: string}
     # execution:
     #   mode: planned              # "direct" (default) | "planned" (plan-then-execute)
     #   verify_steps: true         # call a verifier LLM after each tool call
