@@ -190,6 +190,10 @@ class AgentDef(BaseModel):
     model: str = "claude-sonnet-4-6"
     provider: str = "anthropic"
     temperature: float = 0.2
+    max_tokens: int = 8192
+    max_turns: int = 20
+    tool_timeout: int = 30
+    history_window_tokens: int = 90_000
     tools: list[Tool] = Field(default_factory=list)
     governance: Optional[Governance] = None
     triggers: list[Trigger] = Field(default_factory=list)
@@ -309,6 +313,10 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         model=str(runtime.get("model", "claude-sonnet-4-6")),
         provider=str(runtime.get("provider", "anthropic")),
         temperature=float(runtime.get("temperature", 0.2)),
+        max_tokens=int(runtime.get("max_tokens", 8192)),
+        max_turns=int(runtime.get("max_turns", 20)),
+        tool_timeout=int(runtime.get("tool_timeout", 30)),
+        history_window_tokens=int(runtime.get("history_window_tokens", 90_000)),
         tools=[Tool(**t) for t in (araw.get("tools") or [])],
         governance=_parse_governance(araw["governance"]) if araw.get("governance") else None,
         triggers=[Trigger(**t) for t in (araw.get("triggers") or [])],

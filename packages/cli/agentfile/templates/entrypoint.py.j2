@@ -37,11 +37,11 @@ from datetime import datetime as _dt, timezone as _tz
 PROVIDER   = os.environ.get("AGENTFILE_PROVIDER",    "{{ agent.provider }}")
 MODEL      = os.environ.get("AGENTFILE_MODEL",       "{{ agent.model }}")
 TEMP       = float(os.environ.get("AGENTFILE_TEMPERATURE", "{{ agent.temperature }}"))
-MAX_TOKENS          = 8192   # max output tokens per LLM call
-MAX_TURNS           = int(os.environ.get("AGENTFILE_MAX_TURNS", "20"))
-TOOL_TIMEOUT        = 30     # seconds before a hanging MCP tool call is aborted
+MAX_TOKENS          = int(os.environ.get("AGENTFILE_MAX_TOKENS",          "{{ max_tokens }}"))
+MAX_TURNS           = int(os.environ.get("AGENTFILE_MAX_TURNS",           "{{ max_turns }}"))
+TOOL_TIMEOUT        = int(os.environ.get("AGENTFILE_TOOL_TIMEOUT",        "{{ tool_timeout }}"))
 MCP_INIT_TIMEOUT    = 60     # seconds to wait for each MCP server to initialize at startup
-HISTORY_WINDOW_TOKENS = 90_000  # target token budget for history window
+HISTORY_WINDOW_TOKENS = int(os.environ.get("AGENTFILE_HISTORY_WINDOW_TOKENS", "{{ history_window_tokens }}"))
 
 try:
     import litellm

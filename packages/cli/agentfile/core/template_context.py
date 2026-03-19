@@ -48,6 +48,10 @@ if _PYDANTIC_AVAILABLE:
         agent_name: str = ""
         collaborators: list = []
         has_collaborators: bool = False
+        max_tokens: int = 8192
+        max_turns: int = 20
+        tool_timeout: int = 30
+        history_window_tokens: int = 90_000
         invoke_port: int = 9000
         transfer_timeout: int = 300
         base_image: str = "python:3.12-slim"
@@ -215,6 +219,10 @@ def build_context(
         "agent_name":                 agent_def.name,
         "collaborators":              collaborators,
         "has_collaborators":          has_collaborators,
+        "max_tokens":                 agent_def.max_tokens,
+        "max_turns":                  agent_def.max_turns,
+        "tool_timeout":               agent_def.tool_timeout,
+        "history_window_tokens":      agent_def.history_window_tokens,
         "invoke_port":                9000,
         "transfer_timeout":           300,
         "base_image":                 base_image,

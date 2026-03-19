@@ -142,6 +142,10 @@
               },
               "model":       { "type": "string", "minLength": 1, "description": "Model name for the chosen provider (e.g. claude-sonnet-4-6, gpt-4o, gemini-2.5-flash-lite). Override with AGENTFILE_MODEL env var." },
               "temperature": { "type": "number", "minimum": 0.0, "maximum": 2.0, "description": "Sampling temperature. 0.0 = deterministic, 1.0 = default, 2.0 = very creative. Override with AGENTFILE_TEMPERATURE env var." },
+              "max_tokens": { "type": "integer", "minimum": 1, "description": "Max output tokens per LLM call. Default: 8192. Override with AGENTFILE_MAX_TOKENS env var." },
+              "max_turns": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Safety cap on the agentic tool-use loop. Default: 20. Override with AGENTFILE_MAX_TURNS env var." },
+              "tool_timeout": { "type": "integer", "minimum": 1, "description": "Seconds before a hanging tool call is aborted. Default: 30. Override with AGENTFILE_TOOL_TIMEOUT env var." },
+              "history_window_tokens": { "type": "integer", "minimum": 1000, "description": "Target token budget for the sliding history window. Default: 90000. Override with AGENTFILE_HISTORY_WINDOW_TOKENS env var." },
               "resources": {
                 "type": "object",
                 "additionalProperties": false,
