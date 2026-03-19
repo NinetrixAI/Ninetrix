@@ -1,6 +1,6 @@
 """Persistent CLI configuration stored in ~/.agentfile/config.json.
 
-Holds non-secret settings (API URL, workspace).  Secrets (tokens, machine
+Holds non-secret settings (API URL, organization).  Secrets (tokens, machine
 secrets) live in auth.json / .api-secret — never here.
 
 Resolution order for get_api_url() (first match wins):

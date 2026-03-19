@@ -182,8 +182,8 @@ class VolumeSpec:
 class MCPGatewayConfig:
     """Points agents at a remote MCP Gateway instead of spawning local MCP servers."""
     url: str                          # HTTP(S) URL of the gateway (e.g. https://mcp.ninetrix.io)
-    token: str = ""                   # Workspace token — Bearer auth header
-    workspace_id: str = "default"     # Workspace to scope tool access
+    token: str = ""                   # Organization token — Bearer auth header
+    org_id: str = "default"           # Organization to scope tool access
 
 
 # ── Agent definition ──────────────────────────────────────────────────────────
@@ -331,7 +331,7 @@ def _parse_mcp_gateway(raw: dict | None) -> Optional[MCPGatewayConfig]:
     return MCPGatewayConfig(
         url=str(raw["url"]),
         token=str(raw.get("token", "") or ""),
-        workspace_id=str(raw.get("workspace_id", "default") or "default"),
+        org_id=str(raw.get("org_id", raw.get("workspace_id", "default")) or "default"),
     )
 
 

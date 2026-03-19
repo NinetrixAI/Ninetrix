@@ -143,7 +143,7 @@ When `mcp_gateway:` is present:
 |-----|--------|---------|
 | `MCP_GATEWAY_URL` | env / .env / yaml | Gateway WebSocket URL (localhost rewritten to host.docker.internal) |
 | `MCP_GATEWAY_TOKEN` | env / .env / yaml | Auth token for the gateway |
-| `MCP_GATEWAY_WORKSPACE` | env / .env / yaml | Workspace ID for tool scoping |
+| `MCP_GATEWAY_ORG_ID` | env / .env / yaml | Workspace ID for tool scoping |
 
 ---
 

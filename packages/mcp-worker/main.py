@@ -34,9 +34,9 @@ async def main():
     cfg = load_config(config_path)
 
     logger.info(
-        "Starting worker %r (workspace=%s) → gateway %s",
+        "Starting worker %r (org=%s) → gateway %s",
         cfg.worker_name,
-        cfg.workspace_id,
+        cfg.org_id,
         cfg.gateway_url,
     )
 
@@ -59,7 +59,7 @@ async def main():
     client = GatewayClient(
         gateway_url=cfg.gateway_url,
         worker_id=cfg.worker_id,
-        workspace_id=cfg.workspace_id,
+        org_id=cfg.org_id,
         worker_name=cfg.worker_name,
         token=cfg.token,
         on_tool_call=handle_tool_call,

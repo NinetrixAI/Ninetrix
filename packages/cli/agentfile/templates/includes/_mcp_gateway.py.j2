@@ -2,10 +2,10 @@
 # ── MCP Gateway client (runtime tool discovery over HTTP JSON-RPC) ─────────────
 _MCP_GATEWAY_URL       = os.environ.get("MCP_GATEWAY_URL",       {{ mcp_gateway_url | tojson }}).rstrip("/")
 _MCP_GATEWAY_TOKEN     = os.environ.get("MCP_GATEWAY_TOKEN",     {{ mcp_gateway_token | tojson }})
-_MCP_GATEWAY_WORKSPACE = os.environ.get("MCP_GATEWAY_WORKSPACE", {{ mcp_gateway_workspace | tojson }})
+_MCP_GATEWAY_ORG_ID = os.environ.get("MCP_GATEWAY_ORG_ID", {{ mcp_gateway_org_id | tojson }})
 
 _GW_HEADERS: dict = ({"Authorization": f"Bearer {_MCP_GATEWAY_TOKEN}"} if _MCP_GATEWAY_TOKEN else {})
-_GW_ENDPOINT = f"{_MCP_GATEWAY_URL}/v1/mcp/{_MCP_GATEWAY_WORKSPACE}"
+_GW_ENDPOINT = f"{_MCP_GATEWAY_URL}/v1/mcp/{_MCP_GATEWAY_ORG_ID}"
 
 
 class _MCPGatewaySession:

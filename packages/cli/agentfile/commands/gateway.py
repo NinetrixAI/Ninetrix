@@ -118,9 +118,9 @@ def _gateway_http_url() -> str:
     """Return the HTTP base URL for gateway admin/health calls.
 
     Converts ws:// → http:// and wss:// → https:// if the user set MCP_GATEWAY_URL
-    as a WebSocket URL.  Defaults to port 8080 (the gateway, not the API).
+    as a WebSocket URL.  Defaults to port 9090 (the gateway, not the API).
     """
-    raw = os.environ.get("MCP_GATEWAY_URL", "http://localhost:8080")
+    raw = os.environ.get("MCP_GATEWAY_URL", "http://localhost:9090")
     return raw.replace("ws://", "http://").replace("wss://", "https://")
 
 
@@ -431,14 +431,14 @@ def gateway_status() -> None:
     if workers:
         t = Table(show_header=True, header_style="bold")
         t.add_column("Worker", style="bold cyan")
-        t.add_column("Workspace")
+        t.add_column("Organization")
         t.add_column("Servers")
         t.add_column("Tools", justify="right")
         t.add_column("Connected")
         for w in workers:
             t.add_row(
                 w.get("worker_name", w.get("worker_id", "?")),
-                w.get("workspace_id", ""),
+                w.get("org_id", w.get("workspace_id", "")),
                 ", ".join(w.get("servers", [])) or "—",
                 str(w.get("tool_count", 0)),
                 w.get("connected_at", "")[:19],
@@ -504,7 +504,7 @@ def gateway_doctor() -> None:
     for w in workers:
         console.print(
             f"  [green]✓[/green] Worker    [bold]{w.get('worker_name', w.get('worker_id', '?'))}[/bold]"
-            f"  (workspace: {w.get('workspace_id', '?')})"
+            f"  (org: {w.get('org_id', w.get('workspace_id', '?'))})"
         )
 
     # ── 3. Tool counts per server prefix ──────────────────────────────────────

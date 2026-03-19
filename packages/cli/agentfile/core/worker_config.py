@@ -27,12 +27,12 @@ _DEFAULT_SCAFFOLD = """\
 #
 # All top-level fields can also be overridden with environment variables:
 #   gateway_url    → MCP_GATEWAY_URL
-#   workspace_id   → MCP_WORKSPACE_ID
+#   org_id         → MCP_ORG_ID
 #   worker_name    → MCP_WORKER_NAME
 #   token          → MCP_GATEWAY_TOKEN
 
 gateway_url: "ws://mcp-gateway:8080"
-workspace_id: "default"
+org_id: "default"
 worker_name: "default"
 token: "dev-secret"
 

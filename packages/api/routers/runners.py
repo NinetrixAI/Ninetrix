@@ -4,8 +4,8 @@ Accepts the same PostEventsPayload structure as saas-api so agents can point
 AGENTFILE_API_URL at either this local server or the cloud SaaS API
 interchangeably.
 
-Authentication: machine secret (auto-shared with CLI on same host) or a
-workspace token stored in the workspace_tokens table.
+Authentication: machine secret (auto-shared with CLI on same host) or an
+organization token stored in the org_tokens table.
 """
 from __future__ import annotations
 

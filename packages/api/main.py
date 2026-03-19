@@ -53,6 +53,7 @@ app.include_router(approvals.router, prefix="/approvals", tags=["approvals"])
 app.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
 app.include_router(tokens.router, prefix="/tokens", tags=["tokens"])
 app.include_router(runners.router, prefix="/v1/runners", tags=["runners"])
+app.include_router(runners.router, prefix="/internal/v1/runners", tags=["runners"])
 
 
 @app.get("/health")

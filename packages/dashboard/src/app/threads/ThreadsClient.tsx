@@ -443,17 +443,20 @@ function TraceNodeRow({
   totalMs,
   onSelect,
   isSelected,
+  expanded,
+  onToggleExpand,
 }: {
   node: TraceNode;
   totalMs: number;
   onSelect: (n: TraceNode) => void;
   isSelected: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const cfg = NODE_CONFIG[node.type];
-  const [expanded, setExpanded] = useState(false);
 
   const handleClick = () => {
-    setExpanded((e) => !e);
+    onToggleExpand();
     onSelect(node);
   };
 
@@ -1076,6 +1079,11 @@ function TraceDrawer({
   const sseRef = useRef<(() => void) | null>(null);
   const accEventsRef = useRef<TimelineEvent[]>([]);
   const sseFirstBatch = useRef(true);
+  // Track which trace nodes the user has expanded — survives data refreshes
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // Keep a fresh ref to thread so callbacks don't depend on the thread object identity
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
 
   // Resizable split for timeline view
   const [topHeight, setTopHeight] = useState(280);
@@ -1109,66 +1117,68 @@ function TraceDrawer({
       const evs = await getThreadTimeline(thread.thread_id);
       accEventsRef.current = evs;
       setEvents(evs);
-      setNodes(timelineEventsToTraceNodes(evs, thread));
+      setNodes(timelineEventsToTraceNodes(evs, threadRef.current));
       setError(null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load timeline");
     } finally {
       setLoading(false);
     }
-  }, [thread]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.thread_id]);
 
+  // Full reset only when a different thread is opened
   useEffect(() => {
     setLoading(true);
     setNodes([]);
     setEvents([]);
     accEventsRef.current = [];
     setSelectedNode(null);
+    setExpandedNodes(new Set());
     fetchTimeline();
+  }, [thread.thread_id, fetchTimeline]);
 
-    // Stream live updates if running or idle (container still alive, waiting for next message)
-    if (normalizeStatus(thread.status) === "running" || normalizeStatus(thread.status) === "idle") {
-      sseFirstBatch.current = true;
-      const cleanup = subscribeThreadStream(
-        thread.thread_id,
-        (update: StreamUpdate) => {
-          if (update.events.length > 0) {
-            if (sseFirstBatch.current) {
-              // First SSE batch always contains full history — replace to avoid
-              // race condition with fetchTimeline() which also sets accEventsRef
-              accEventsRef.current = update.events;
-              sseFirstBatch.current = false;
-            } else {
-              accEventsRef.current = [...accEventsRef.current, ...update.events];
-            }
-            setEvents([...accEventsRef.current]);
-            setNodes(timelineEventsToTraceNodes(accEventsRef.current, thread));
+  // SSE subscription — reconnects when status changes to running/idle
+  const status = normalizeStatus(thread.status);
+  useEffect(() => {
+    if (status !== "running" && status !== "idle") return;
+
+    sseFirstBatch.current = true;
+    const cleanup = subscribeThreadStream(
+      thread.thread_id,
+      (update: StreamUpdate) => {
+        if (update.events.length > 0) {
+          if (sseFirstBatch.current) {
+            accEventsRef.current = update.events;
+            sseFirstBatch.current = false;
+          } else {
+            accEventsRef.current = [...accEventsRef.current, ...update.events];
           }
-        },
-        () => {
-          // Final refresh on completion to get accurate metadata
-          fetchTimeline();
-        },
-      );
-      sseRef.current = cleanup;
-      return () => {
-        cleanup();
-        sseRef.current = null;
-      };
-    }
-    return () => {};
-  }, [thread.thread_id, fetchTimeline, thread.status]);
+          setEvents([...accEventsRef.current]);
+          setNodes(timelineEventsToTraceNodes(accEventsRef.current, threadRef.current));
+        }
+      },
+      () => {
+        fetchTimeline();
+      },
+    );
+    sseRef.current = cleanup;
+    return () => {
+      cleanup();
+      sseRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread.thread_id, status, fetchTimeline]);
 
   // Watch for status changes when not streaming (handles thread resuming after completion)
-  // Idle means container is alive — SSE covers it, no polling needed.
-  const isRunning = normalizeStatus(thread.status) === "running" || normalizeStatus(thread.status) === "idle";
+  const isRunning = status === "running" || status === "idle";
   useEffect(() => {
     if (isRunning) return;
     const iv = setInterval(async () => {
       try {
         const { items } = await listThreads({ limit: 200 });
         const updated = items.find((t) => t.thread_id === thread.thread_id);
-        if (updated && updated.status !== thread.status) {
+        if (updated && updated.status !== threadRef.current.status) {
           if (normalizeStatus(updated.status) === "running") {
             accEventsRef.current = [];
             fetchTimeline();
@@ -1177,7 +1187,7 @@ function TraceDrawer({
       } catch { /* silent */ }
     }, 3000);
     return () => clearInterval(iv);
-  }, [thread.thread_id, thread.status, isRunning, fetchTimeline]);
+  }, [thread.thread_id, isRunning, fetchTimeline]);
 
   const totalTokens = formatTokens(thread.tokens_used);
 
@@ -1597,6 +1607,15 @@ function TraceDrawer({
                         totalMs={calcTotalMs(nodes)}
                         onSelect={setSelectedNode}
                         isSelected={selectedNode?.id === node.id}
+                        expanded={expandedNodes.has(node.id)}
+                        onToggleExpand={() =>
+                          setExpandedNodes((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(node.id)) next.delete(node.id);
+                            else next.add(node.id);
+                            return next;
+                          })
+                        }
                       />
                     ))}
                   </div>
@@ -1989,11 +2008,22 @@ export default function ThreadsClient() {
       setThreads(data.items ?? []);
       setTotal(data.total ?? 0);
       setError(null);
-      // Keep the drawer's thread in sync so status-change effects fire correctly
+      // Keep the drawer's thread in sync — but only update the object reference
+      // when data actually changed to avoid cascading re-renders in TraceDrawer
       setSelected((prev) => {
         if (!prev) return prev;
         const fresh = (data.items ?? []).find((t) => t.thread_id === prev.thread_id);
-        return fresh ?? prev;
+        if (!fresh) return prev;
+        // Only swap if something visible changed
+        if (
+          fresh.status === prev.status &&
+          fresh.step_index === prev.step_index &&
+          fresh.tokens_used === prev.tokens_used &&
+          fresh.duration_ms === prev.duration_ms
+        ) {
+          return prev; // same data — keep old reference
+        }
+        return fresh;
       });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load threads");

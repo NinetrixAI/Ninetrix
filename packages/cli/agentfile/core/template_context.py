@@ -59,7 +59,7 @@ if _PYDANTIC_AVAILABLE:
         use_mcp_gateway: bool = False
         mcp_gateway_url: str = ""
         mcp_gateway_token: str = ""
-        mcp_gateway_workspace: str = "default"
+        mcp_gateway_org_id: str = "default"
         has_local_tools: bool = False
         local_tool_files: list = []
         local_tool_manifests: list = []
@@ -105,16 +105,16 @@ def build_context(
         .replace("127.0.0.1", "host.docker.internal")
     )
     mcp_gateway_token     = mcp_gateway.token        if mcp_gateway else ""
-    mcp_gateway_workspace = mcp_gateway.workspace_id if mcp_gateway else "default"
+    mcp_gateway_org_id = mcp_gateway.org_id if mcp_gateway else "default"
 
     # Local MCP subprocess mode has been removed.
     # All MCP tools now route through the MCP gateway/worker infrastructure.
     # use_mcp_gateway is True whenever the agent has any mcp:// tools.
     has_any_mcp_tools = any(t.is_mcp() for t in agent.tools)
     if has_any_mcp_tools and not use_mcp_gateway:
-        # No explicit mcp_gateway: block in yaml — gateway URL/token/workspace
+        # No explicit mcp_gateway: block in yaml — gateway URL/token/org_id
         # will be read purely from env vars (MCP_GATEWAY_URL, MCP_GATEWAY_TOKEN,
-        # MCP_GATEWAY_WORKSPACE) at runtime.
+        # MCP_GATEWAY_ORG_ID) at runtime.
         use_mcp_gateway = True
 
     composio_tool_defs = [
@@ -227,7 +227,7 @@ def build_context(
         "use_mcp_gateway":            use_mcp_gateway,
         "mcp_gateway_url":            mcp_gateway_url,
         "mcp_gateway_token":          mcp_gateway_token,
-        "mcp_gateway_workspace":      mcp_gateway_workspace,
+        "mcp_gateway_org_id":      mcp_gateway_org_id,
         "has_local_tools":            has_local_tools,
         "local_tool_files":           local_tool_files,
         "local_tool_manifests":       local_tool_manifests,

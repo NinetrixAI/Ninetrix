@@ -1,4 +1,4 @@
-"""Workspace token management — create, list, revoke personal access tokens.
+"""Organization token management — create, list, revoke personal access tokens.
 
 These endpoints are intentionally unprotected: they manage token *metadata*
 (labels, ids) only — the raw token is shown exactly once at creation and is
@@ -13,7 +13,7 @@ import secrets
 from fastapi import APIRouter, HTTPException
 
 from ninetrix_api import db
-from ninetrix_api.models import CreateTokenPayload, WorkspaceToken
+from ninetrix_api.models import CreateTokenPayload, OrgToken
 
 router = APIRouter()
 
@@ -21,17 +21,17 @@ _TOKEN_PREFIX = "nxt_"
 
 
 @router.get("")
-async def list_tokens() -> list[WorkspaceToken]:
-    """List all workspace tokens (no raw values — those are shown once at creation)."""
+async def list_tokens() -> list[OrgToken]:
+    """List all organization tokens (no raw values — those are shown once at creation)."""
     rows = await db.pool().fetch(
         """
         SELECT id::text, label, created_at, last_used_at
-        FROM workspace_tokens
-        WHERE workspace_id = 'default'
+        FROM org_tokens
+        WHERE org_id = 'default'
         ORDER BY created_at DESC
         """
     )
-    return [WorkspaceToken(**dict(row)) for row in rows]
+    return [OrgToken(**dict(row)) for row in rows]
 
 
 @router.post("")
@@ -41,7 +41,7 @@ async def create_token(payload: CreateTokenPayload) -> dict:
     h = hashlib.sha256(raw.encode()).hexdigest()
     await db.pool().execute(
         """
-        INSERT INTO workspace_tokens (workspace_id, token_hash, label)
+        INSERT INTO org_tokens (org_id, token_hash, label)
         VALUES ('default', $1, $2)
         """,
         h, payload.label,
@@ -53,7 +53,7 @@ async def create_token(payload: CreateTokenPayload) -> dict:
 async def revoke_token(token_id: str) -> dict:
     """Revoke a token by its UUID."""
     result = await db.pool().execute(
-        "DELETE FROM workspace_tokens WHERE id::text = $1 AND workspace_id = 'default'",
+        "DELETE FROM org_tokens WHERE id::text = $1 AND org_id = 'default'",
         token_id,
     )
     if result == "DELETE 0":

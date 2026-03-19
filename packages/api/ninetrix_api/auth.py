@@ -51,7 +51,7 @@ async def verify_token(request: Request) -> None:
 
     Accepted tokens (checked in order):
     1. Machine secret  — auto-shared with CLI on the same machine via filesystem
-    2. Workspace token — hashed SHA-256 row in workspace_tokens table
+    2. Organization token — hashed SHA-256 row in org_tokens table
     """
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
@@ -70,7 +70,7 @@ async def verify_token(request: Request) -> None:
     # 3. Hashed token lookup in DB
     try:
         row = await db.pool().fetchrow(
-            "SELECT id FROM workspace_tokens WHERE token_hash = $1", token_hash
+            "SELECT id FROM org_tokens WHERE token_hash = $1", token_hash
         )
     except Exception:
         raise HTTPException(status_code=503, detail="Auth service unavailable")
@@ -81,7 +81,7 @@ async def verify_token(request: Request) -> None:
     # Bump last_used_at without blocking the response
     asyncio.create_task(
         db.pool().execute(
-            "UPDATE workspace_tokens SET last_used_at = NOW() WHERE id = $1",
+            "UPDATE org_tokens SET last_used_at = NOW() WHERE id = $1",
             row["id"],
         )
     )

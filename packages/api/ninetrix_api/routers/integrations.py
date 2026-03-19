@@ -182,7 +182,7 @@ async def get_credentials() -> dict:
             SELECT ui.integration_id, ic.key_name, ic.encrypted_value
             FROM user_integrations ui
             JOIN integration_credentials ic ON ic.user_integration_id = ui.id
-            WHERE ui.workspace_id = 'default' AND ui.status = 'connected'
+            WHERE ui.org_id = 'default' AND ui.status = 'connected'
             """
         )
     result: dict[str, dict[str, str]] = {}
@@ -206,7 +206,7 @@ async def list_integrations() -> list[IntegrationCatalogItem]:
     async with p.acquire() as conn:
         catalog_rows = await conn.fetch("SELECT * FROM integration_catalog ORDER BY id")
         ui_rows = await conn.fetch(
-            "SELECT * FROM user_integrations WHERE workspace_id = 'default'"
+            "SELECT * FROM user_integrations WHERE org_id = 'default'"
         )
     ui_map = {row["integration_id"]: dict(row) for row in ui_rows}
     return [
@@ -224,7 +224,7 @@ async def get_integration(id: str) -> IntegrationCatalogItem:
         if not row:
             raise HTTPException(status_code=404, detail=f"Integration '{id}' not found")
         ui_row = await conn.fetchrow(
-            "SELECT * FROM user_integrations WHERE integration_id = $1 AND workspace_id = 'default'",
+            "SELECT * FROM user_integrations WHERE integration_id = $1 AND org_id = 'default'",
             id,
         )
     return _row_to_catalog_item(dict(row), dict(ui_row) if ui_row else None)
@@ -252,9 +252,9 @@ async def authorize(id: str):
     async with p.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO user_integrations (integration_id, workspace_id, status, oauth_state)
+            INSERT INTO user_integrations (integration_id, org_id, status, oauth_state)
             VALUES ($1, 'default', 'pending', $2)
-            ON CONFLICT (integration_id, workspace_id) DO UPDATE
+            ON CONFLICT (integration_id, org_id) DO UPDATE
             SET status = 'pending', oauth_state = $2
             """,
             id, state,
@@ -290,7 +290,7 @@ async def callback(id: str, code: str = "", state: str = "", error: str = ""):
     p = db.pool()
     async with p.acquire() as conn:
         ui_row = await conn.fetchrow(
-            "SELECT * FROM user_integrations WHERE integration_id = $1 AND workspace_id = 'default'",
+            "SELECT * FROM user_integrations WHERE integration_id = $1 AND org_id = 'default'",
             id,
         )
 
@@ -321,12 +321,12 @@ async def callback(id: str, code: str = "", state: str = "", error: str = ""):
             UPDATE user_integrations
             SET status = 'connected', account_label = $1,
                 connected_at = NOW(), oauth_state = NULL
-            WHERE integration_id = $2 AND workspace_id = 'default'
+            WHERE integration_id = $2 AND org_id = 'default'
             """,
             account_label, id,
         )
         ui_id = await conn.fetchval(
-            "SELECT id FROM user_integrations WHERE integration_id = $1 AND workspace_id = 'default'",
+            "SELECT id FROM user_integrations WHERE integration_id = $1 AND org_id = 'default'",
             id,
         )
         await conn.execute(
@@ -361,15 +361,15 @@ async def save_api_key(id: str, payload: ApiKeyPayload) -> dict:
         await conn.execute(
             """
             INSERT INTO user_integrations
-                (integration_id, workspace_id, status, account_label, connected_at)
+                (integration_id, org_id, status, account_label, connected_at)
             VALUES ($1, 'default', 'connected', $2, NOW())
-            ON CONFLICT (integration_id, workspace_id) DO UPDATE
+            ON CONFLICT (integration_id, org_id) DO UPDATE
             SET status = 'connected', account_label = $2, connected_at = NOW()
             """,
             id, f"{id}: connected",
         )
         ui_id = await conn.fetchval(
-            "SELECT id FROM user_integrations WHERE integration_id = $1 AND workspace_id = 'default'",
+            "SELECT id FROM user_integrations WHERE integration_id = $1 AND org_id = 'default'",
             id,
         )
         await conn.execute(
@@ -391,7 +391,7 @@ async def disconnect(id: str) -> dict:
     p = db.pool()
     async with p.acquire() as conn:
         result = await conn.execute(
-            "DELETE FROM user_integrations WHERE integration_id = $1 AND workspace_id = 'default'",
+            "DELETE FROM user_integrations WHERE integration_id = $1 AND org_id = 'default'",
             id,
         )
     if result == "DELETE 0":

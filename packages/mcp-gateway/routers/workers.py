@@ -20,7 +20,7 @@ async def worker_websocket(
     websocket: WebSocket,
     worker_id: str,
     token: Optional[str] = Query(None),
-    workspace_id: str = Query(default="default"),   # kept for logging only — token wins
+    org_id: str = Query(default="default"),   # kept for logging only — token wins
     worker_name: Optional[str] = Query(default=None),
 ):
     """
@@ -28,22 +28,22 @@ async def worker_websocket(
 
     Query params:
       token        — worker token (validated against saas-api in prod, env-secret in dev)
-      workspace_id — hint only; the verified workspace from the token is always used
+      org_id       — hint only; the verified organization from the token is always used
       worker_name  — human-readable label
     """
-    # Verify token — the resolved workspace overrides whatever the worker claims
-    verified_workspace = await verify_worker_token(token)
-    if not verified_workspace:
+    # Verify token — the resolved org overrides whatever the worker claims
+    verified_org = await verify_worker_token(token)
+    if not verified_org:
         await websocket.close(code=4003, reason="Unauthorized")
         return
 
     await websocket.accept()
 
     name = worker_name or worker_id
-    conn = registry.connect(worker_id, name, verified_workspace, websocket)
+    conn = registry.connect(worker_id, name, verified_org, websocket)
     logger.info(
-        "Worker connected: id=%s name=%s workspace=%s (claimed=%s)",
-        worker_id, name, verified_workspace, workspace_id,
+        "Worker connected: id=%s name=%s org=%s (claimed=%s)",
+        worker_id, name, verified_org, org_id,
     )
 
     try:

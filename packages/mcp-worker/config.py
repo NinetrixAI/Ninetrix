@@ -22,7 +22,7 @@ class WorkerConfig:
     gateway_url: str
     worker_id: str
     worker_name: str
-    workspace_id: str
+    org_id: str
     token: str
     servers: list[ServerConfig]
 
@@ -34,7 +34,7 @@ def load_config(path: Optional[str] = None) -> WorkerConfig:
             data = yaml.safe_load(f) or {}
 
     gateway_url = os.getenv("MCP_GATEWAY_URL", data.get("gateway_url", "ws://localhost:8080"))
-    workspace_id = os.getenv("MCP_WORKSPACE_ID", data.get("workspace_id", "default"))
+    org_id = os.getenv("MCP_ORG_ID", data.get("org_id", data.get("workspace_id", "default")))
     worker_name = os.getenv("MCP_WORKER_NAME", data.get("worker_name", "worker-1"))
     worker_id = os.getenv("MCP_WORKER_ID", data.get("worker_id", worker_name))
     token = os.getenv("MCP_GATEWAY_TOKEN", data.get("token", "dev-secret"))
@@ -58,7 +58,7 @@ def load_config(path: Optional[str] = None) -> WorkerConfig:
         gateway_url=gateway_url,
         worker_id=worker_id,
         worker_name=worker_name,
-        workspace_id=workspace_id,
+        org_id=org_id,
         token=token,
         servers=servers,
     )

@@ -30,14 +30,14 @@ class GatewayClient:
         self,
         gateway_url: str,
         worker_id: str,
-        workspace_id: str,
+        org_id: str,
         worker_name: str,
         token: str,
         on_tool_call: ToolCallHandler,
     ):
         self.gateway_url = gateway_url.rstrip("/")
         self.worker_id = worker_id
-        self.workspace_id = workspace_id
+        self.org_id = org_id
         self.worker_name = worker_name
         self.token = token
         self.on_tool_call = on_tool_call
@@ -54,7 +54,7 @@ class GatewayClient:
         return (
             f"{self.gateway_url}/ws/workers/{self.worker_id}"
             f"?token={self.token}"
-            f"&workspace_id={self.workspace_id}"
+            f"&org_id={self.org_id}"
             f"&worker_name={self.worker_name}"
         )
 

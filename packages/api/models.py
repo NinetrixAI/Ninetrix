@@ -108,9 +108,9 @@ class ApiKeyPayload(BaseModel):
     key: str
 
 
-# ── Workspace tokens ───────────────────────────────────────────────────────────
+# ── Organization tokens ────────────────────────────────────────────────────────
 
-class WorkspaceToken(BaseModel):
+class OrgToken(BaseModel):
     id: str
     label: str
     created_at: datetime

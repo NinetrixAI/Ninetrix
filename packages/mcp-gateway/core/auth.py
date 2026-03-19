@@ -4,13 +4,13 @@ Two modes controlled by environment:
 
   Dev mode  (MCP_GATEWAY_SAAS_API_URL not set):
     - Tokens compared against MCP_GATEWAY_SECRET env var
-    - Token format: "{workspace_id}:{secret}" → returns workspace_id
-                    "{secret}"                 → returns "default"
+    - Token format: "{org_id}:{secret}" → returns org_id
+                    "{secret}"           → returns "default"
     - REQUIRE_AUTH=false allows unauthenticated access (local docker-compose)
 
   Prod mode (MCP_GATEWAY_SAAS_API_URL set):
     - Token sent to saas-api POST /internal/v1/gateway/verify-token
-    - Returns the org_id as workspace_id
+    - Returns the org_id
     - 5-minute in-memory cache to avoid per-request HTTP calls
     - REQUIRE_AUTH is implicitly true (saas-api always validates)
 """
@@ -30,7 +30,7 @@ _PROD_MODE: bool = bool(saas_client.SAAS_API_URL)
 
 async def verify_token(authorization: Optional[str]) -> str:
     """
-    Validate the Authorization header and return the resolved workspace_id.
+    Validate the Authorization header and return the resolved org_id.
 
     In prod mode: delegates to saas-api (result cached 5 min).
     In dev mode:  validates against MCP_GATEWAY_SECRET env var.
@@ -43,18 +43,18 @@ async def verify_token(authorization: Optional[str]) -> str:
     if _PROD_MODE:
         if not token:
             raise HTTPException(status_code=401, detail="Missing authorization token")
-        workspace_id = await saas_client.verify_token(token)
-        if workspace_id is None:
+        org_id = await saas_client.verify_token(token)
+        if org_id is None:
             raise HTTPException(status_code=403, detail="Invalid or expired token")
-        return workspace_id
+        return org_id
 
     # ── Dev mode: env-secret check ─────────────────────────────────────────────
     if not REQUIRE_AUTH:
         if token:
             if ":" in token:
-                workspace_id, secret = token.split(":", 1)
+                org_id, secret = token.split(":", 1)
                 if secret == GATEWAY_SECRET:
-                    return workspace_id
+                    return org_id
             if token == GATEWAY_SECRET:
                 return "default"
         # dev mode: allow unauthenticated access
@@ -64,9 +64,9 @@ async def verify_token(authorization: Optional[str]) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Missing authorization header")
     if ":" in token:
-        workspace_id, secret = token.split(":", 1)
+        org_id, secret = token.split(":", 1)
         if secret == GATEWAY_SECRET:
-            return workspace_id
+            return org_id
     if token == GATEWAY_SECRET:
         return "default"
 
@@ -77,20 +77,20 @@ async def verify_worker_token(token: Optional[str]) -> str:
     """
     Validate a worker WebSocket token (passed as query param, not Bearer header).
     Same logic as verify_token but accepts a raw token string.
-    Returns the resolved workspace_id.
+    Returns the resolved org_id.
     """
     if _PROD_MODE:
         if not token:
             return ""  # caller will close WS with 4001
-        workspace_id = await saas_client.verify_token(token)
-        return workspace_id or ""
+        org_id = await saas_client.verify_token(token)
+        return org_id or ""
 
     # Dev mode
     if not REQUIRE_AUTH:
         if token and ":" in token:
-            workspace_id, secret = token.split(":", 1)
+            org_id, secret = token.split(":", 1)
             if secret == GATEWAY_SECRET:
-                return workspace_id
+                return org_id
         if token == GATEWAY_SECRET or not REQUIRE_AUTH:
             return "default"
         return "default"
@@ -98,9 +98,9 @@ async def verify_worker_token(token: Optional[str]) -> str:
     if not token:
         return ""
     if ":" in token:
-        workspace_id, secret = token.split(":", 1)
+        org_id, secret = token.split(":", 1)
         if secret == GATEWAY_SECRET:
-            return workspace_id
+            return org_id
     if token == GATEWAY_SECRET:
         return "default"
     return ""

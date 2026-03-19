@@ -1,9 +1,9 @@
 """HTTP client for mcp-gateway → saas-api internal calls.
 
 Provides two operations with in-memory caching:
-  1. verify_token(token)   → workspace_id   (5-min TTL)
-  2. get_tool_credential(workspace_id, integration_id, tool_name) → env_vars dict
-  3. get_integration_auth_url(workspace_id, integration_id) → auth_url | None
+  1. verify_token(token)   → org_id   (5-min TTL)
+  2. get_tool_credential(org_id, integration_id, tool_name) → env_vars dict
+  3. get_integration_auth_url(org_id, integration_id) → auth_url | None
 
 All calls use X-Gateway-Secret for authentication.
 Only active when MCP_GATEWAY_SAAS_API_URL is set (prod mode).
@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 SAAS_API_URL: str = os.getenv("MCP_GATEWAY_SAAS_API_URL", "").rstrip("/")
 GATEWAY_SERVICE_SECRET: str = os.getenv("MCP_GATEWAY_SERVICE_SECRET", "dev-gateway-secret")
 
-# In-memory token cache: token_hash → (workspace_id, expires_at)
+# In-memory token cache: token_hash → (org_id, expires_at)
 _token_cache: dict[str, tuple[str, float]] = {}
 _TOKEN_TTL = 300  # 5 minutes
 
@@ -35,7 +35,7 @@ def _headers() -> dict[str, str]:
 
 async def verify_token(token: str) -> Optional[str]:
     """
-    Resolve a worker/agent token to a workspace_id.
+    Resolve a worker/agent token to an org_id.
     Returns None if the token is invalid (caller should 401/403).
     Caches valid results for 5 minutes to avoid per-request HTTP round-trips.
     """
@@ -47,9 +47,9 @@ async def verify_token(token: str) -> Optional[str]:
     # Cache hit
     cached = _token_cache.get(token_hash)
     if cached:
-        workspace_id, expires_at = cached
+        org_id, expires_at = cached
         if time.monotonic() < expires_at:
-            return workspace_id
+            return org_id
         del _token_cache[token_hash]
 
     try:
@@ -63,9 +63,9 @@ async def verify_token(token: str) -> Optional[str]:
             return None
         resp.raise_for_status()
         data = resp.json()
-        workspace_id = data["workspace_id"]
-        _token_cache[token_hash] = (workspace_id, time.monotonic() + _TOKEN_TTL)
-        return workspace_id
+        org_id = data.get("org_id") or data.get("workspace_id")
+        _token_cache[token_hash] = (org_id, time.monotonic() + _TOKEN_TTL)
+        return org_id
 
     except httpx.HTTPStatusError as exc:
         log.warning("verify_token: saas-api returned %s", exc.response.status_code)
@@ -113,7 +113,7 @@ async def get_tool_credential(
 
 
 async def get_integration_auth_url(
-    workspace_id: str,
+    org_id: str,
     integration_id: str,
 ) -> Optional[str]:
     """
@@ -127,7 +127,7 @@ async def get_integration_auth_url(
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.post(
                 f"{SAAS_API_URL}/internal/v1/gateway/integration-auth-url",
-                json={"workspace_id": workspace_id, "integration_id": integration_id},
+                json={"org_id": org_id, "integration_id": integration_id},
                 headers=_headers(),
             )
         resp.raise_for_status()

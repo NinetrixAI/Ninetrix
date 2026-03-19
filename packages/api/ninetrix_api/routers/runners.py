@@ -4,8 +4,8 @@ Accepts the same PostEventsPayload structure as saas-api so agents can point
 AGENTFILE_API_URL at either this local server or the cloud SaaS API
 interchangeably.
 
-Authentication: machine secret (auto-shared with CLI on same host) or a
-workspace token stored in the workspace_tokens table.
+Authentication: machine secret (auto-shared with CLI on same host) or an
+organization token stored in the org_tokens table.
 """
 from __future__ import annotations
 
@@ -238,6 +238,150 @@ async def ingest_events(
                     budget    = data.get("budget_usd", 0)
                     log.warning("budget_warning | thread=%s pct=%s%% cost=$%.4f budget=$%.2f",
                                 thread_id, pct_used, run_cost, budget)
+
+                # ── Workflow events ───────────────────────────────────────────
+
+                elif event.type == "workflow_started":
+                    thread_id = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    trace_id     = data.get("trace_id") or f"run_{thread_id[:8]}"
+                    wf_name      = data.get("workflow_name", "workflow")
+                    checkpoint_json = json.dumps({
+                        "history":      [{"role": "user", "content": f"Workflow: {wf_name}"}],
+                        "history_meta": [{"ts": now.isoformat()}],
+                    })
+                    metadata_json = json.dumps({
+                        "type": "workflow", "workflow_name": wf_name, "tokens_used": 0,
+                    })
+                    await conn.execute(
+                        """
+                        INSERT INTO agentfile_checkpoints
+                            (trace_id, thread_id, agent_id, step_index, status,
+                             checkpoint, metadata)
+                        VALUES ($1, $2, $3, 0, 'in_progress', $4::jsonb, $5::jsonb)
+                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        """,
+                        trace_id, thread_id, f"workflow:{wf_name}",
+                        checkpoint_json, metadata_json,
+                    )
+                    log.info("workflow_started | thread=%s workflow=%s", thread_id, wf_name)
+
+                elif event.type == "workflow_step_completed":
+                    thread_id = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    step_name = data.get("step_name", "?")
+                    cached    = bool(data.get("cached", False))
+                    label     = f"⚡ {step_name} (cached)" if cached else f"✓ {step_name}"
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET checkpoint = jsonb_set(
+                                jsonb_set(checkpoint, '{history}',
+                                    (checkpoint->'history') || $2::jsonb),
+                                '{history_meta}',
+                                (checkpoint->'history_meta') || $3::jsonb)
+                        WHERE thread_id = $1 AND step_index = 0
+                        """,
+                        thread_id,
+                        json.dumps([{"role": "assistant", "content": label}]),
+                        json.dumps([{"ts": now.isoformat()}]),
+                    )
+
+                elif event.type == "workflow_completed":
+                    thread_id  = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    terminated = bool(data.get("terminated", False))
+                    new_status = "completed"
+                    extra_meta = json.dumps({
+                        "completed_steps":    data.get("completed_steps", []),
+                        "skipped_steps":      data.get("skipped_steps", []),
+                        "terminated":         terminated,
+                        "termination_reason": data.get("termination_reason", ""),
+                    })
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET status   = $2,
+                            metadata = metadata || $3::jsonb
+                        WHERE thread_id = $1 AND step_index = 0
+                        """,
+                        thread_id, new_status, extra_meta,
+                    )
+                    log.info("workflow_completed | thread=%s terminated=%s", thread_id, terminated)
+
+                # ── Team events ───────────────────────────────────────────────
+
+                elif event.type == "team_started":
+                    thread_id = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    trace_id     = data.get("trace_id") or f"run_{thread_id[:8]}"
+                    team_name    = data.get("team_name", "team")
+                    agent_names  = data.get("agents", [])
+                    checkpoint_json = json.dumps({
+                        "history":      [{"role": "user", "content": f"Team: {team_name}"}],
+                        "history_meta": [{"ts": now.isoformat()}],
+                    })
+                    metadata_json = json.dumps({
+                        "type": "team", "team_name": team_name,
+                        "agents": agent_names, "tokens_used": 0,
+                    })
+                    await conn.execute(
+                        """
+                        INSERT INTO agentfile_checkpoints
+                            (trace_id, thread_id, agent_id, step_index, status,
+                             checkpoint, metadata)
+                        VALUES ($1, $2, $3, 0, 'in_progress', $4::jsonb, $5::jsonb)
+                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        """,
+                        trace_id, thread_id, f"team:{team_name}",
+                        checkpoint_json, metadata_json,
+                    )
+                    log.info("team_started | thread=%s team=%s agents=%s",
+                             thread_id, team_name, agent_names)
+
+                elif event.type == "team_routed":
+                    thread_id = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    routed_to = data.get("routed_to", "?")
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET checkpoint = jsonb_set(
+                                jsonb_set(checkpoint, '{history}',
+                                    (checkpoint->'history') || $2::jsonb),
+                                '{history_meta}',
+                                (checkpoint->'history_meta') || $3::jsonb)
+                        WHERE thread_id = $1 AND step_index = 0
+                        """,
+                        thread_id,
+                        json.dumps([{"role": "assistant",
+                                     "content": f"→ Routed to: {routed_to}"}]),
+                        json.dumps([{"ts": now.isoformat()}]),
+                    )
+
+                elif event.type == "team_completed":
+                    thread_id   = data.get("thread_id", "")
+                    if not thread_id:
+                        continue
+                    routed_to   = data.get("routed_to", "")
+                    tokens_used = int(data.get("tokens_used", 0) or 0)
+                    await conn.execute(
+                        """
+                        UPDATE agentfile_checkpoints
+                        SET status   = 'completed',
+                            metadata = metadata || $2::jsonb
+                        WHERE thread_id = $1 AND step_index = 0
+                        """,
+                        thread_id,
+                        json.dumps({"tokens_used": tokens_used, "routed_to": routed_to}),
+                    )
+                    log.info("team_completed | thread=%s routed_to=%s tokens=%d",
+                             thread_id, routed_to, tokens_used)
 
                 else:
                     # Store unknown events in runner_events for debugging

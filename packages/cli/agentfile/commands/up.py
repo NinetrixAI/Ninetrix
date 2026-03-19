@@ -163,7 +163,7 @@ def _build_agent_env(
     # a gateway running on the host (e.g. started by `ninetrix dev`).
     # Auto-detect: if the local gateway is up, wire agents to it automatically.
     _gw_running = _is_gateway_running()
-    for _var in ("MCP_GATEWAY_URL", "MCP_GATEWAY_TOKEN", "MCP_GATEWAY_WORKSPACE"):
+    for _var in ("MCP_GATEWAY_URL", "MCP_GATEWAY_TOKEN", "MCP_GATEWAY_ORG_ID"):
         _val = os.environ.get(_var) or _load_dotenv_key(_var)
         if _val:
             if _var == "MCP_GATEWAY_URL":
@@ -172,7 +172,7 @@ def _build_agent_env(
             env.setdefault(_var, _val)
     if _gw_running:
         env.setdefault("MCP_GATEWAY_URL", "http://host.docker.internal:8080")
-        env.setdefault("MCP_GATEWAY_WORKSPACE", "default")
+        env.setdefault("MCP_GATEWAY_ORG_ID", "default")
 
     for peer_name, peer_url in peer_urls.items():
         if peer_name != agent_name:

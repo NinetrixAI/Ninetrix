@@ -35,8 +35,8 @@ def _gw_url() -> str:
     return raw.replace("ws://", "http://").replace("wss://", "https://")
 
 
-def _gw_workspace() -> str:
-    return os.environ.get("MCP_GATEWAY_WORKSPACE", "local")
+def _gw_org_id() -> str:
+    return os.environ.get("MCP_GATEWAY_ORG_ID", "local")
 
 
 def _gw_token() -> str | None:
@@ -261,7 +261,7 @@ def mcp_list(agentfile_path: str) -> None:
     if gw_online:
         console.print(
             f"  [green]✓[/green] Gateway [bold]{_gw_url()}[/bold]  "
-            f"workspace=[bold]{_gw_workspace()}[/bold]  "
+            f"org=[bold]{_gw_org_id()}[/bold]  "
             f"{len(tools)} tool(s)\n"
         )
     else:
@@ -557,13 +557,13 @@ def mcp_remove(name: str, yes: bool, no_restart: bool) -> None:
 @click.argument("tool_name", required=False)
 @click.option("--arg", "-a", "args_pairs", multiple=True, metavar="KEY=VALUE",
               help="Arguments for the tool call (repeatable)")
-@click.option("--workspace", default=None,
-              help="Gateway workspace (default: from MCP_GATEWAY_WORKSPACE or 'local')")
+@click.option("--org-id", default=None,
+              help="Gateway organization (default: from MCP_GATEWAY_ORG_ID or 'local')")
 def mcp_test(
     server_name: str,
     tool_name: str | None,
     args_pairs: tuple[str, ...],
-    workspace: str | None,
+    org_id: str | None,
 ) -> None:
     """Test MCP tools via the live gateway.
 
@@ -583,7 +583,7 @@ def mcp_test(
     console.print()
     console.print("[bold purple]ninetrix mcp test[/bold purple]\n")
 
-    ws = workspace or _gw_workspace()
+    ws = org_id or _gw_org_id()
     endpoint = f"{_gw_url()}/v1/mcp/{ws}"
     headers = {**_gw_headers(), "Content-Type": "application/json"}
 

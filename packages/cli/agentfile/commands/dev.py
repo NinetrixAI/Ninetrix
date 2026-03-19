@@ -28,8 +28,8 @@ _STACK = [
     },
     {
         "name": "mcp-gateway",
-        "health_url": "http://localhost:8080/health",
-        "display_port": "http://localhost:8080",
+        "health_url": "http://localhost:9090/health",
+        "display_port": "http://localhost:9090",
     },
     {
         "name": "mcp-worker",
@@ -113,8 +113,8 @@ def _ensure_mcp_worker_config() -> None:
 
     # Write a minimal fallback inline
     dest.write_text(
-        "gateway_url: ws://localhost:8080\n"
-        "workspace_id: default\n"
+        "gateway_url: ws://localhost:9090\n"
+        "org_id: default\n"
         "worker_name: default\n"
         "servers: []\n"
     )
@@ -343,7 +343,7 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
     \b
     Agents should set:
       AGENTFILE_API_URL=http://localhost:8000
-      MCP_GATEWAY_URL=http://localhost:8080
+      MCP_GATEWAY_URL=http://localhost:9090
     """
     console.print()
     console.rule("[bold cyan]  Ninetrix Dev  [/bold cyan]")

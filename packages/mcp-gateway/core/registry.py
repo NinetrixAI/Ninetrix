@@ -16,7 +16,7 @@ from models import ToolSchema, WorkerStatus
 class WorkerConnection:
     worker_id: str
     worker_name: str
-    workspace_id: str
+    org_id: str
     websocket: WebSocket
     tools: list[ToolSchema] = field(default_factory=list)
     servers: list[str] = field(default_factory=list)
@@ -37,13 +37,13 @@ class WorkerRegistry:
         self,
         worker_id: str,
         worker_name: str,
-        workspace_id: str,
+        org_id: str,
         ws: WebSocket,
     ) -> WorkerConnection:
         conn = WorkerConnection(
             worker_id=worker_id,
             worker_name=worker_name,
-            workspace_id=workspace_id,
+            org_id=org_id,
             websocket=ws,
         )
         self._workers[worker_id] = conn
@@ -72,11 +72,11 @@ class WorkerRegistry:
             else:
                 conn.tool_map[tool.name] = ("", tool.name)
 
-    def get_tools(self, workspace_id: str) -> list[ToolSchema]:
+    def get_tools(self, org_id: str) -> list[ToolSchema]:
         seen: set[str] = set()
         tools: list[ToolSchema] = []
         for conn in self._workers.values():
-            if conn.workspace_id == workspace_id:
+            if conn.org_id == org_id:
                 for tool in conn.tools:
                     if tool.name not in seen:
                         tools.append(tool)
@@ -84,25 +84,25 @@ class WorkerRegistry:
         return tools
 
     def get_worker_for_tool(
-        self, workspace_id: str, tool_name: str
+        self, org_id: str, tool_name: str
     ) -> Optional[tuple[WorkerConnection, str, str]]:
         """Return (connection, server_name, local_tool_name) or None."""
         for conn in self._workers.values():
-            if conn.workspace_id == workspace_id and tool_name in conn.tool_map:
+            if conn.org_id == org_id and tool_name in conn.tool_map:
                 server_name, local_name = conn.tool_map[tool_name]
                 return conn, server_name, local_name
         return None
 
-    def list_workers(self, workspace_id: Optional[str] = None) -> list[WorkerStatus]:
+    def list_workers(self, org_id: Optional[str] = None) -> list[WorkerStatus]:
         result = []
         for conn in self._workers.values():
-            if workspace_id and conn.workspace_id != workspace_id:
+            if org_id and conn.org_id != org_id:
                 continue
             result.append(
                 WorkerStatus(
                     worker_id=conn.worker_id,
                     worker_name=conn.worker_name,
-                    workspace_id=conn.workspace_id,
+                    org_id=conn.org_id,
                     tool_count=len(conn.tools),
                     servers=conn.servers,
                     connected_at=conn.connected_at,

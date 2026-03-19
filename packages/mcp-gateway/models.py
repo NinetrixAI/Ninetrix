@@ -15,7 +15,7 @@ class ToolSchema(BaseModel):
 class WorkerStatus(BaseModel):
     worker_id: str
     worker_name: str
-    workspace_id: str
+    org_id: str
     tool_count: int
     servers: list[str]
     connected_at: datetime

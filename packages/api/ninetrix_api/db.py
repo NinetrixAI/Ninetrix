@@ -270,13 +270,13 @@ async def create_integration_tables() -> None:
             CREATE TABLE IF NOT EXISTS user_integrations (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 integration_id TEXT NOT NULL REFERENCES integration_catalog(id),
-                workspace_id TEXT NOT NULL DEFAULT 'default',
+                org_id TEXT NOT NULL DEFAULT 'default',
                 status TEXT NOT NULL DEFAULT 'pending',
                 account_label TEXT,
                 oauth_state TEXT,
                 connected_at TIMESTAMPTZ,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (integration_id, workspace_id)
+                UNIQUE (integration_id, org_id)
             )
         """)
         await conn.execute("""
@@ -291,9 +291,9 @@ async def create_integration_tables() -> None:
             )
         """)
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS workspace_tokens (
+            CREATE TABLE IF NOT EXISTS org_tokens (
                 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                workspace_id TEXT NOT NULL DEFAULT 'default',
+                org_id TEXT NOT NULL DEFAULT 'default',
                 token_hash TEXT NOT NULL UNIQUE,
                 label TEXT NOT NULL,
                 created_at TIMESTAMPTZ DEFAULT NOW(),

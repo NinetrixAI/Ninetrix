@@ -31,6 +31,7 @@ from agentfile.commands.gateway import gateway_cmd
 from agentfile.commands.dev import dev_command
 from agentfile.commands.env import env_cmd
 from agentfile.commands.ls import ls_cmd
+from agentfile.commands.connect import connect_cmd, disconnect_cmd, connections_cmd
 
 console = Console()
 
@@ -85,6 +86,12 @@ def cli() -> None:
       ninetrix dev           start local server (API + MCP gateway + dashboard)
 
     \b
+    Integrations (Ninetrix Cloud):
+      ninetrix connections   list available integrations and connected status
+      ninetrix connect       authorize an integration via OAuth (e.g. github, slack)
+      ninetrix disconnect    revoke an integration and remove vault credentials
+
+    \b
     Utilities:
       ninetrix ls            list agents, tools, and triggers from agentfile.yaml
       ninetrix validate      lint agentfile.yaml without building
@@ -118,6 +125,9 @@ cli.add_command(gateway_cmd,  name="gateway")
 cli.add_command(dev_command,   name="dev")
 cli.add_command(env_cmd,       name="env")
 cli.add_command(ls_cmd,        name="ls")
+cli.add_command(connections_cmd, name="connections")
+cli.add_command(connect_cmd,     name="connect")
+cli.add_command(disconnect_cmd,  name="disconnect")
 
 
 def main() -> None:

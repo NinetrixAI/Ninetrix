@@ -339,15 +339,15 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
         env["MCP_GATEWAY_TOKEN"] = _gw_token_src
 
     _gw_ws_src = (
-        os.environ.get("MCP_GATEWAY_WORKSPACE")
-        or _load_dotenv_key("MCP_GATEWAY_WORKSPACE")
-        or (af.mcp_gateway.workspace_id if af.mcp_gateway else None)
+        os.environ.get("MCP_GATEWAY_ORG_ID")
+        or _load_dotenv_key("MCP_GATEWAY_ORG_ID")
+        or (af.mcp_gateway.org_id if af.mcp_gateway else None)
     )
     if _gw_ws_src:
-        env["MCP_GATEWAY_WORKSPACE"] = _gw_ws_src
+        env["MCP_GATEWAY_ORG_ID"] = _gw_ws_src
     elif _gw_running:
-        # Dev stack always resolves REQUIRE_AUTH=false tokens to workspace "default"
-        env.setdefault("MCP_GATEWAY_WORKSPACE", "default")
+        # Dev stack always resolves REQUIRE_AUTH=false tokens to org "default"
+        env.setdefault("MCP_GATEWAY_ORG_ID", "default")
 
     for pair in extra_env:
         if "=" in pair:
