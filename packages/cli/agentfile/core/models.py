@@ -207,6 +207,7 @@ class AgentDef(BaseModel):
     routing_mode: Literal["agent", "auto"] = "agent"
     routing_model: str = ""
     routing_provider: str = ""
+    transfer_timeout: int = 300
     resources: Resources = Field(default_factory=Resources)
     volume_refs: list[Union[str, VolumeSpec]] = Field(default_factory=list)
     serve: bool = False
@@ -334,6 +335,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         routing_mode=str((araw.get("routing") or {}).get("mode", "agent")),
         routing_model=str((araw.get("routing") or {}).get("model", "") or ""),
         routing_provider=str((araw.get("routing") or {}).get("provider", "") or ""),
+        transfer_timeout=int(araw.get("transfer_timeout", 300)),
         resources=Resources(**(runtime.get("resources") or {})),
         volume_refs=volume_refs,
         serve=bool(araw.get("serve", False)),

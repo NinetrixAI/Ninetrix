@@ -302,6 +302,12 @@
             "items": { "type": "string", "minLength": 1 }
           },
 
+          "transfer_timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Seconds before a collaborator transfer times out. Default: 300."
+          },
+
           "routing": {
             "type": "object",
             "description": "How this agent routes to collaborators. 'agent' (default) = the agent's LLM decides via transfer_to_agent tool. 'auto' = a cheap router LLM picks the collaborator before the agentic loop.",

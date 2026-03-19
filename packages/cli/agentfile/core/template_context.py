@@ -241,7 +241,7 @@ def build_context(
         "tool_timeout":               agent_def.tool_timeout,
         "history_window_tokens":      agent_def.history_window_tokens,
         "invoke_port":                9000,
-        "transfer_timeout":           300,
+        "transfer_timeout":           agent_def.transfer_timeout,
         "base_image":                 base_image,
         "has_s3_volumes":             has_s3_volumes,
         "volume_defs":                volume_defs,

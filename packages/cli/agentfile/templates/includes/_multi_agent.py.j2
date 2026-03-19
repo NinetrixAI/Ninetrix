@@ -8,7 +8,12 @@ async def _transfer_to_agent(
     """Delegate a task to a collaborator agent via its /invoke endpoint."""
     url = PEER_URLS.get(agent.lower())
     if not url:
-        return f"Error: agent '{agent}' not in PEER_URLS. Known peers: {list(PEER_URLS)}"
+        _err = f"Agent '{agent}' not found. Known peers: {list(PEER_URLS)}"
+        _post_runner_event("agent_transfer_failed", {
+            "thread_id": thread_id, "from": AGENT_NAME, "to": agent,
+            "error": "agent_not_found", "detail": _err,
+        })
+        return f"Error: {_err}"
     payload = {
         "thread_id": thread_id,
         "run_id": uuid.uuid4().hex,
@@ -17,22 +22,60 @@ async def _transfer_to_agent(
         "context": context,
         "parent_trace_id": caller_trace_id,
     }
+    _post_runner_event("agent_transfer_started", {
+        "thread_id": thread_id, "from": AGENT_NAME, "to": agent,
+        "message_preview": message[:200],
+    })
     print(f"[transfer→] {AGENT_NAME} → {agent}: {message[:120]}", flush=True)
-    try:
-        async with aiohttp.ClientSession() as _s:
-            async with _s.post(
-                f"{url}/invoke",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=TRANSFER_TIMEOUT),
-            ) as _r:
-                data = await _r.json()
-        if data.get("status") == "completed":
-            result = str(data.get("result", ""))
-        else:
-            result = f"Error from '{agent}': {data.get('error', 'unknown error')}"
-    except Exception as exc:
-        result = f"Error calling '{agent}': {type(exc).__name__}: {exc}"
-    print(f"[transfer←] {agent} → {AGENT_NAME}: {result[:120]}", flush=True)
+    _start_ts = __import__("time").monotonic()
+
+    # Retry once on connection error (not on agent-level errors)
+    for _attempt in range(2):
+        try:
+            async with aiohttp.ClientSession() as _s:
+                async with _s.post(
+                    f"{url}/invoke",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=TRANSFER_TIMEOUT),
+                ) as _r:
+                    data = await _r.json()
+            if data.get("status") == "completed":
+                result = str(data.get("result", ""))
+            else:
+                result = f"Agent '{agent}' returned error: {data.get('error', 'unknown')}"
+            break
+        except aiohttp.ClientConnectorError as exc:
+            if _attempt == 0:
+                print(f"[transfer] Connection to '{agent}' failed, retrying in 2s...",
+                      file=sys.stderr, flush=True)
+                await asyncio.sleep(2)
+                continue
+            result = f"Agent '{agent}' unreachable after retry: {type(exc).__name__}: {exc}"
+            break
+        except asyncio.TimeoutError:
+            result = f"Agent '{agent}' timed out after {TRANSFER_TIMEOUT}s"
+            break
+        except Exception as exc:
+            result = f"Agent '{agent}' call failed: {type(exc).__name__}: {exc}"
+            break
+
+    _elapsed_ms = int((__import__("time").monotonic() - _start_ts) * 1000)
+    _is_error = result.startswith("Agent '") and ("error" in result.lower() or "unreachable" in result.lower() or "timed out" in result.lower() or "failed" in result.lower())
+
+    if _is_error:
+        _post_runner_event("agent_transfer_failed", {
+            "thread_id": thread_id, "from": AGENT_NAME, "to": agent,
+            "error": "transfer_error", "detail": result[:500],
+            "duration_ms": _elapsed_ms,
+        })
+    else:
+        _post_runner_event("agent_transfer_completed", {
+            "thread_id": thread_id, "from": AGENT_NAME, "to": agent,
+            "duration_ms": _elapsed_ms,
+            "result_preview": result[:200],
+        })
+
+    print(f"[transfer←] {agent} → {AGENT_NAME}: {result[:120]} ({_elapsed_ms}ms)", flush=True)
     return result
 
 
