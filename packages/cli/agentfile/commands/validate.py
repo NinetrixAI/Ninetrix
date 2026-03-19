@@ -139,6 +139,36 @@ def _check_agents(af) -> list[dict]:
             else:
                 results.append(_r("ok", prefix,
                     f"Collaborators: {', '.join(agent_def.collaborators)}"))
+            if agent_def.routing_mode == "auto":
+                results.append(_r("ok", prefix,
+                    f"Auto-routing enabled (router: {agent_def.routing_provider or agent_def.provider}"
+                    f"/{agent_def.routing_model or 'claude-haiku-4-5-20251001'})"))
+
+        # Structured output
+        if agent_def.output_type is not None:
+            ot = agent_def.output_type
+            if not isinstance(ot, dict):
+                results.append(_r("error", prefix,
+                    "output_type must be a JSON Schema object"))
+            elif "properties" not in ot and "type" not in ot:
+                results.append(_r("warn", prefix,
+                    "output_type has no 'properties' or 'type' — schema may be incomplete"))
+            else:
+                n_props = len(ot.get("properties", {}))
+                n_req = len(ot.get("required", []))
+                results.append(_r("ok", prefix,
+                    f"Structured output: {n_props} field(s), {n_req} required"))
+
+        # Budget without persistence
+        eff_gov = af.effective_governance(agent_def)
+        if eff_gov.max_budget_per_run < 1.0 and not hasattr(agent_def, "persistence"):
+            # Check if persistence is configured via raw YAML
+            raw_agents = getattr(af, "raw", {}).get("agents", {})
+            agent_raw = raw_agents.get(agent_name, {})
+            if not agent_raw.get("persistence"):
+                results.append(_r("warn", prefix,
+                    f"Budget ${eff_gov.max_budget_per_run:.2f} set but no persistence configured — "
+                    "budget cannot be tracked across restarts"))
 
         # Volumes
         eff_vols = af.effective_volumes(agent_def)

@@ -293,6 +293,11 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
 
     Reshapes metadata/runtime nesting into flat AgentDef fields.
     """
+    if not isinstance(araw, dict):
+        raise ValueError(
+            f"agents.{key}: expected a mapping, got {type(araw).__name__}.\n"
+            f"  Fix: ensure 'agents.{key}:' has metadata/runtime/tools sub-keys."
+        )
     meta = araw.get("metadata") or {}
     runtime = araw.get("runtime") or {}
 
@@ -376,7 +381,18 @@ class AgentFile(BaseModel):
             data = yaml.safe_load(fh)
 
         if not isinstance(data, dict):
-            raise ValueError("Agentfile must be a YAML mapping at the root level.")
+            raise ValueError(
+                "Agentfile must be a YAML mapping at the root level.\n"
+                "  Why: the file is empty or contains a scalar/list instead of a mapping.\n"
+                "  Fix: ensure the file starts with 'agents:' or 'schema_version:'."
+            )
+
+        if "agents" not in data:
+            raise ValueError(
+                "Missing required 'agents:' key in agentfile.yaml.\n"
+                "  Why: every agentfile must define at least one agent.\n"
+                "  Fix: add an 'agents:' block. Run 'ninetrix init' for a template."
+            )
 
         # Deprecation warning for old/missing schema_version
         version = str(data.get("schema_version") or data.get("version") or "1.0")
