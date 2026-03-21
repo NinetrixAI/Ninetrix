@@ -1,3 +1,13 @@
+---
+name: code-review
+version: 1.0.0
+description: Systematic code review playbook
+author: ninetrix
+tags: [development, review, security]
+requires:
+  tools: [builtin://shell]
+---
+
 # Code Review
 
 When reviewing code, follow this process:

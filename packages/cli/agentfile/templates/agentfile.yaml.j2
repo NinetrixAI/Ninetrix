@@ -52,10 +52,10 @@ agents:
     #   source: composio://GMAIL
     #   actions:             # optional: limit to specific actions
     #     - GMAIL_SEND_EMAIL
-    # Skills — reusable prompt-layer playbooks (directory with instructions.md)
+    # Skills — reusable prompt-layer playbooks (SKILL.md with frontmatter)
     # skills:
-    #   - source: ./skills/my-playbook   # dict form
-    #   - ./skills/another-playbook      # string shorthand
+    #   - hub://code-review@1.0.0        # from Skills Hub (version pinned)
+    #   - ./skills/my-playbook            # local directory with SKILL.md
     collaborators: []
     # transfer_timeout: 300          # seconds before a collaborator transfer times out
     # routing:                       # how to route to collaborators

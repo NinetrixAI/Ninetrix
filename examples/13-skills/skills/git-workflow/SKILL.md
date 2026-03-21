@@ -1,3 +1,13 @@
+---
+name: git-workflow
+version: 1.0.0
+description: Git branching and commit message conventions
+author: ninetrix
+tags: [development, git, workflow]
+requires:
+  tools: [builtin://shell]
+---
+
 # Git Workflow
 
 ## Branch naming

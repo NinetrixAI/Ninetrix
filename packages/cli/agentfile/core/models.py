@@ -107,6 +107,22 @@ class Skill(BaseModel):
     def is_hub(self) -> bool:
         return self.source.startswith("hub://")
 
+    @property
+    def hub_slug(self) -> str | None:
+        """Return the skill slug from 'hub://code-review@1.0.0' → 'code-review'. None if not hub."""
+        if not self.is_hub():
+            return None
+        raw = self.source[len("hub://"):]
+        return raw.split("@")[0] if "@" in raw else raw
+
+    @property
+    def hub_version(self) -> str | None:
+        """Return the pinned version from 'hub://code-review@1.0.0' → '1.0.0'. None if unpinned."""
+        if not self.is_hub():
+            return None
+        raw = self.source[len("hub://"):]
+        return raw.split("@")[1] if "@" in raw else None
+
 
 class HumanApproval(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -230,6 +246,7 @@ class AgentDef(BaseModel):
     routing_model: str = ""
     routing_provider: str = ""
     transfer_timeout: int = 300
+    packages: list[str] = Field(default_factory=list)
     resources: Resources = Field(default_factory=Resources)
     volume_refs: list[Union[str, VolumeSpec]] = Field(default_factory=list)
     serve: bool = False
@@ -364,6 +381,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         routing_model=str((araw.get("routing") or {}).get("model", "") or ""),
         routing_provider=str((araw.get("routing") or {}).get("provider", "") or ""),
         transfer_timeout=int(araw.get("transfer_timeout", 300)),
+        packages=list(araw.get("packages") or []),
         resources=Resources(**(runtime.get("resources") or {})),
         volume_refs=volume_refs,
         serve=bool(araw.get("serve", False)),
@@ -601,8 +619,8 @@ class AgentFile(BaseModel):
                     )
 
             for i, skill in enumerate(agent.skills):
-                if skill.is_hub():
-                    errors.append(f"{prefix}.skills[{i}]: hub:// skills are not yet supported")
+                if skill.is_hub() and not skill.hub_slug:
+                    errors.append(f"{prefix}.skills[{i}]: hub:// skill missing slug (e.g. hub://code-review@1.0.0)")
 
             eff_exec = self.effective_execution(agent)
             if eff_exec.mode not in ("direct", "planned"):

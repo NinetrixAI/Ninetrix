@@ -1,3 +1,13 @@
+---
+name: error-handling-playbook
+version: 1.0.0
+description: Systematic recovery when tool calls fail — retry, fallback, or explain
+author: ninetrix
+tags: [development, reliability, error-handling]
+requires:
+  tools: []
+---
+
 # Error Handling Playbook
 
 When a tool call fails, do NOT just apologize. Follow this recovery ladder:

@@ -98,7 +98,23 @@ def _build_one(
                     lines.append(line)
             return True, full_tag, lines
         except _DE as exc:
-            return False, full_tag, [str(exc)]
+            import re
+            if hasattr(exc, "build_log"):
+                for entry in exc.build_log:
+                    line = (entry.get("stream") or entry.get("error") or "").strip()
+                    if line:
+                        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                        lines.append(line)
+            full_output = "\n".join(lines)
+            pkg_matches = re.findall(r"Unable to locate package\s+(\S+)", full_output)
+            if pkg_matches:
+                error_msg = (
+                    f"Package not found: {', '.join(pkg_matches)}. "
+                    f"Check the spelling in your agentfile.yaml 'packages' list."
+                )
+            else:
+                error_msg = str(exc)
+            return False, full_tag, [error_msg]
 
 
 @click.command("build")

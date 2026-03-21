@@ -1,3 +1,13 @@
+---
+name: structured-output
+version: 1.0.0
+description: Ensure all responses follow the expected output format
+author: ninetrix
+tags: [output, json, formatting]
+requires:
+  tools: []
+---
+
 # Structured Output
 
 Your responses MUST follow the output format defined by the system. This is non-negotiable.

@@ -195,9 +195,17 @@
             }
           },
 
+          "packages": {
+            "type": "array",
+            "description": "System packages to install in the agent container via apt-get. Use standard Debian/Ubuntu package names. Example: [\"git\", \"curl\", \"ffmpeg\", \"chromium\"].",
+            "items": {
+              "type": "string"
+            }
+          },
+
           "skills": {
             "type": "array",
-            "description": "Reusable prompt-layer playbooks. Each skill is a directory with skill.yaml + instructions.md, injected into the system prompt at build time.",
+            "description": "Reusable prompt-layer playbooks. Each skill is a SKILL.md file (frontmatter + instructions body) or a hub:// reference with version pin (e.g. hub://code-review@1.0.0). Injected into the system prompt at build time.",
             "items": {
               "oneOf": [
                 {

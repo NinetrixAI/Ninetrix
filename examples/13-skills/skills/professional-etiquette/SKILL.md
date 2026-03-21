@@ -1,3 +1,13 @@
+---
+name: professional-etiquette
+version: 1.0.0
+description: Customer-facing communication standards and tone guidelines
+author: ninetrix
+tags: [communication, customer-facing, tone]
+requires:
+  tools: []
+---
+
 # Professional Etiquette
 
 ## Tone

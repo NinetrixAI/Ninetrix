@@ -85,10 +85,13 @@ def _client() -> docker.DockerClient:
 
 def build_image(context_dir: Path, image_name: str, tag: str = "latest") -> str:
     """Build a Docker image from context_dir. Returns the full image tag."""
+    import re
+
     client = _client()
     full_tag = f"{image_name}:{tag}" if ":" not in image_name else image_name
 
     console.print(f"  Building [bold]{full_tag}[/bold] …")
+    build_log: list[str] = []
     try:
         _image, logs = client.images.build(
             path=str(context_dir),
@@ -99,11 +102,28 @@ def build_image(context_dir: Path, image_name: str, tag: str = "latest") -> str:
         for chunk in logs:
             line = chunk.get("stream", "").rstrip()
             if line:
+                build_log.append(line)
                 console.print(f"    [dim]{line}[/dim]")
         console.print(f"  [green]✓[/green] Image built: [bold]{full_tag}[/bold]")
         return full_tag
     except DockerException as exc:
-        console.print(f"[red]Build failed:[/red] {exc}")
+        # BuildError has a build_log attribute with the full Docker output
+        log_lines = build_log
+        if hasattr(exc, "build_log"):
+            for entry in exc.build_log:
+                line = (entry.get("stream") or entry.get("error") or "").strip()
+                if line:
+                    # Strip ANSI color codes
+                    line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                    log_lines.append(line)
+
+        full_output = "\n".join(log_lines)
+        pkg_matches = re.findall(r"Unable to locate package\s+(\S+)", full_output)
+        if pkg_matches:
+            console.print(f"\n  [red]✗[/red] Package not found: [bold]{', '.join(pkg_matches)}[/bold]")
+            console.print(f"    [dim]Hint: Check the spelling in your agentfile.yaml 'packages' list.[/dim]")
+        else:
+            console.print(f"\n  [red]✗[/red] Build failed: {exc}")
         sys.exit(1)
 
 

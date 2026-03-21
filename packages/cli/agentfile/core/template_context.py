@@ -7,6 +7,8 @@ Used by both:
 
 from __future__ import annotations
 
+import hashlib
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -74,9 +76,142 @@ if _PYDANTIC_AVAILABLE:
         local_source_paths: list = []
         has_builtin_shell: bool = False
         has_builtin_filesystem: bool = False
+        packages: list = []
+        has_packages: bool = False
         has_skills: bool = False
         skill_instructions: str = ""
         skill_source_paths: list = []
+
+
+_SKILLS_HUB_BASE = "https://raw.githubusercontent.com/Ninetrix-ai/skills-hub/main"
+
+# In-memory cache for registry.json during a single build session.
+_hub_registry_cache: dict | None = None
+
+
+def _fetch_url(url: str) -> str | None:
+    """Fetch a URL and return text content, or None on failure."""
+    try:
+        import httpx
+        resp = httpx.get(url, timeout=15, follow_redirects=True)
+        if resp.status_code == 200:
+            return resp.text
+        return None
+    except Exception:
+        return None
+
+
+def _get_hub_registry() -> dict:
+    """Fetch and cache registry.json from the Skills Hub."""
+    global _hub_registry_cache
+    if _hub_registry_cache is not None:
+        return _hub_registry_cache
+
+    import json
+    raw = _fetch_url(f"{_SKILLS_HUB_BASE}/registry.json")
+    if raw:
+        try:
+            _hub_registry_cache = json.loads(raw)
+            return _hub_registry_cache
+        except json.JSONDecodeError:
+            pass
+    _hub_registry_cache = {}
+    return _hub_registry_cache
+
+
+def _resolve_hub_skill(slug: str, version: str | None, _warn: Callable | None = None) -> str | None:
+    """Fetch a hub:// skill from GitHub and verify integrity.
+
+    Returns the instruction body (frontmatter stripped) or None on failure.
+    """
+    registry = _get_hub_registry()
+    skills = registry.get("skills", {})
+
+    # Resolve version
+    resolved_version = version
+    if resolved_version is None:
+        entry = skills.get(slug)
+        if entry and "latest" in entry:
+            resolved_version = entry["latest"]
+            print(
+                f"  ℹ  hub://{slug} resolved to {resolved_version} "
+                f"(pin with hub://{slug}@{resolved_version})",
+                file=sys.stderr,
+            )
+        # If no registry or no entry, we'll still try to fetch directly
+
+    # Fetch SKILL.md
+    url = f"{_SKILLS_HUB_BASE}/skills/{slug}/SKILL.md"
+    raw = _fetch_url(url)
+    if raw is None:
+        if _warn:
+            _warn(
+                f"hub://{slug}: could not fetch from Skills Hub. "
+                "Check your internet connection or verify the skill exists at "
+                f"https://github.com/Ninetrix-ai/skills-hub/tree/main/skills/{slug}"
+            )
+        return None
+
+    body = _strip_frontmatter(raw)
+
+    # Verify SHA256 if registry has hash info
+    if resolved_version and slug in skills:
+        versions = skills[slug].get("versions", {})
+        version_info = versions.get(resolved_version, {})
+        expected_hash = version_info.get("sha256")
+        if expected_hash:
+            actual_hash = hashlib.sha256(body.encode()).hexdigest()
+            if actual_hash != expected_hash:
+                if _warn:
+                    _warn(
+                        f"hub://{slug}@{resolved_version}: SHA256 mismatch! "
+                        f"Expected {expected_hash[:16]}..., got {actual_hash[:16]}... "
+                        "The skill may have been tampered with. Build rejected."
+                    )
+                return None
+
+    if not body.strip():
+        if _warn:
+            _warn(f"hub://{slug}: SKILL.md is empty")
+        return None
+
+    return body
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Strip YAML frontmatter from a SKILL.md file, returning only the body."""
+    stripped = text.strip()
+    if not stripped.startswith("---"):
+        return stripped
+    # Find closing ---
+    end = stripped.find("---", 3)
+    if end == -1:
+        return stripped
+    return stripped[end + 3:].strip()
+
+
+def _resolve_local_skill(path: Path) -> str | None:
+    """Resolve a local skill path to its instruction body.
+
+    Supports two formats:
+      1. New: path points to a directory containing SKILL.md (single file with frontmatter)
+      2. New: path points directly to a SKILL.md file
+      3. Legacy: path points to a directory containing instructions.md + skill.yaml
+    """
+    if path.is_file() and path.name == "SKILL.md":
+        return _strip_frontmatter(path.read_text())
+
+    if path.is_dir():
+        # New format: SKILL.md
+        skill_md = path / "SKILL.md"
+        if skill_md.exists():
+            return _strip_frontmatter(skill_md.read_text())
+        # Legacy format: instructions.md
+        inst = path / "instructions.md"
+        if inst.exists():
+            return inst.read_text().strip()
+
+    return None
 
 
 def build_context(
@@ -214,17 +349,37 @@ def build_context(
     skill_instructions_parts: list[str] = []
     skill_source_paths: list[str] = []
 
-    if agentfile_dir is not None:
-        for _s in agent_def.skills:
-            if _s.is_local():
-                _skill_dir = (Path(agentfile_dir) / _s.source).resolve()
-                _inst = _skill_dir / "instructions.md"
-                if _inst.exists():
-                    skill_instructions_parts.append(_inst.read_text().strip())
-                    skill_source_paths.append(str(_skill_dir))
-                elif _warn:
-                    _warn(f"Skill '{_s.source}': instructions.md not found at {_skill_dir}")
-        has_skills = bool(skill_instructions_parts)
+    for _s in agent_def.skills:
+        if _s.is_hub():
+            _body = _resolve_hub_skill(_s.hub_slug, _s.hub_version, _warn)
+            if _body is not None:
+                skill_instructions_parts.append(_body)
+                skill_source_paths.append(_s.source)
+            elif _warn:
+                _warn(f"Skill '{_s.source}': could not resolve from Skills Hub")
+        elif _s.is_local() and agentfile_dir is not None:
+            _skill_path = (Path(agentfile_dir) / _s.source).resolve()
+            _body = _resolve_local_skill(_skill_path)
+            if _body is not None:
+                skill_instructions_parts.append(_body)
+                skill_source_paths.append(str(_skill_path))
+            elif _warn:
+                _warn(f"Skill '{_s.source}': no SKILL.md or instructions.md found at {_skill_path}")
+    has_skills = bool(skill_instructions_parts)
+
+    # Token budget warning for skills
+    if has_skills:
+        _total_skill_chars = sum(len(p) for p in skill_instructions_parts)
+        _est_tokens = _total_skill_chars // 4  # rough estimate: 4 chars per token
+        _window = getattr(agent_def, "history_window_tokens", 90000) or 90000
+        _pct = (_est_tokens / _window) * 100
+        if _pct > 15:
+            print(
+                f"  ⚠  Skills use ~{_est_tokens:,} tokens ({_pct:.0f}% of "
+                f"history_window_tokens: {_window:,}). Consider reducing skills "
+                f"or increasing runtime.history_window_tokens.",
+                file=sys.stderr,
+            )
 
     import json as _json
     has_output_type = agent_def.output_type is not None
@@ -285,6 +440,8 @@ def build_context(
         "local_source_paths":         local_source_paths,
         "has_builtin_shell":          has_builtin_shell,
         "has_builtin_filesystem":     has_builtin_filesystem,
+        "packages":                   agent_def.packages,
+        "has_packages":               bool(agent_def.packages),
         "has_skills":                 has_skills,
         "skill_instructions":         "\n\n---\n\n".join(skill_instructions_parts),
         "skill_source_paths":         skill_source_paths,
