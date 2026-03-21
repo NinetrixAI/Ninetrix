@@ -10,12 +10,12 @@ governance:
 agents:
   dev-assistant:
     metadata:
-      description: An assistant to help developers with code reviews and git workflows
-      role: Senior Software Engineer
-      goal: Help developers with code reviews and git workflows
+      description: An assistant with general task.
+      role: General assistant for developers
+      goal: Help developers with general tasks and workflows
       instructions: |
         You are a helpful developer assistant.
-        Use your skills to guide code reviews and git workflows.
+        Use your skills to guide developers with various tasks and workflows.
     runtime:
       provider: anthropic
       model: claude-sonnet-4-6
@@ -25,7 +25,8 @@ agents:
         source: builtin://shell
     skills:
       - source: hub://error-handling-playbook
+      - source: hub://agent-browser
     packages:
-      - jq
-      - git
-      - curl
+        - nodejs
+        - npm
+        - npm:agent-browser
