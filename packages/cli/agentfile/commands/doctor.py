@@ -36,14 +36,61 @@ def _fail(msg: str) -> tuple[str, str, str]:
     return ("✗", "red", msg)
 
 
-def _check_docker() -> tuple[str, str, str]:
+def _check_docker() -> list[tuple[str, str, str]]:
+    """Detailed Docker diagnostics: binary installed, daemon running, version + OS."""
+    import shutil
+
+    results: list[tuple[str, str, str]] = []
+
+    # 1. Is the `docker` CLI on PATH?
+    docker_bin = shutil.which("docker")
+    if not docker_bin:
+        from agentfile.core.docker import _docker_install_hint
+        results.append(_fail(f"Docker CLI not found on PATH"))
+        results.append(_warn(f"  {_docker_install_hint()}"))
+        return results
+
+    results.append(_ok(f"Docker CLI found: {docker_bin}"))
+
+    # 2. Can we connect to the daemon?
     try:
         import docker
         client = docker.from_env()
-        info = client.info()
-        return _ok(f"Docker {info.get('ServerVersion', 'running')}")
-    except Exception as exc:
-        return _fail(f"Docker not reachable — {exc}")
+        client.ping()
+    except Exception:
+        results.append(_fail("Docker daemon is not running"))
+        import platform
+        if platform.system() == "Darwin":
+            results.append(_warn("  Start Docker Desktop: open /Applications/Docker.app"))
+        elif platform.system() == "Linux":
+            results.append(_warn("  Start Docker: sudo systemctl start docker"))
+        return results
+
+    # 3. Version + platform info
+    info = client.info()
+    version = info.get("ServerVersion", "unknown")
+    os_type = info.get("OSType", "unknown")
+    arch = info.get("Architecture", "unknown")
+    cpus = info.get("NCPU", "?")
+    mem_gb = round(info.get("MemTotal", 0) / (1024**3), 1)
+    results.append(_ok(f"Docker {version} ({os_type}/{arch}, {cpus} CPUs, {mem_gb} GB RAM)"))
+
+    # 4. Image count
+    try:
+        images = client.images.list()
+        agent_images = [i for i in images if any(
+            t.startswith("ninetrix/") or t.startswith("agentfile/")
+            for t in (i.tags or [])
+        )]
+        if agent_images:
+            tags = [t for i in agent_images for t in (i.tags or [])]
+            results.append(_ok(f"{len(agent_images)} agent image(s): {', '.join(tags[:5])}"))
+        else:
+            results.append(_warn("No agent images built yet (run 'ninetrix build')"))
+    except Exception:
+        pass
+
+    return results
 
 
 def _check_api() -> tuple[str, str, str]:
@@ -241,7 +288,7 @@ def doctor_cmd(agentfile_path: str) -> None:
         for r in results:
             add(category, r)
 
-    add("Docker",    _check_docker())
+    add_many("Docker",    _check_docker())
     add("API",       _check_api())
     add("Database",  _check_database())
     add_many("Pool",      _check_pool())

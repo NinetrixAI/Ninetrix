@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "CLI for building and deploying AI agents as containers"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 keywords = ["ai", "agents", "cli", "docker", "automation"]
 dependencies = [
     "click>=8.1",

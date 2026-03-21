@@ -39,10 +39,20 @@ console = Console()
 
 LOGO = "[bold purple] Ninetrix [/bold purple]"
 
+# Commands that need Docker — pre-flight check runs before any work.
+# Commands that need Docker — pre-flight check runs before any work.
+# Note: "deploy" is NOT here — it uploads YAML to the cloud, no local Docker needed.
+_DOCKER_COMMANDS = frozenset({
+    "build", "run", "up", "down", "status", "logs",
+    "invoke", "restart", "rollback", "compose", "env", "dev",
+    "gateway",
+})
+
 
 @click.group()
 @click.version_option(__version__, "--version", "-V")
-def cli() -> None:
+@click.pass_context
+def cli(ctx: click.Context) -> None:
     """[bold]Ninetrix[/bold] — build and deploy AI agents as containers.
 
     \b
@@ -101,7 +111,12 @@ def cli() -> None:
       ninetrix auth          manage API authentication
       ninetrix config        view and set persistent CLI configuration
     """
-    pass
+    # Pre-flight Docker check for commands that need it.
+    # Runs before any YAML parsing or template work — gives immediate feedback.
+    invoked = ctx.invoked_subcommand
+    if invoked in _DOCKER_COMMANDS:
+        from agentfile.core.docker import require_docker
+        require_docker()
 
 
 # Register sub-commands

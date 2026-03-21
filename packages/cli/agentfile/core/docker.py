@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,11 +13,66 @@ from typing import TYPE_CHECKING
 import docker
 from docker.errors import DockerException
 from rich.console import Console
+from rich.panel import Panel
 
 if TYPE_CHECKING:
     from agentfile.core.models import VolumeSpec
 
 console = Console()
+
+
+def _docker_install_hint() -> str:
+    """Return a platform-specific install hint for Docker."""
+    system = platform.system()
+    if system == "Darwin":
+        return "Install Docker Desktop: brew install --cask docker\n    or download from https://docs.docker.com/desktop/install/mac-install/"
+    elif system == "Linux":
+        return "Install Docker Engine: curl -fsSL https://get.docker.com | sh\n    Then start it: sudo systemctl start docker"
+    elif system == "Windows":
+        return "Install Docker Desktop: https://docs.docker.com/desktop/install/windows-install/"
+    return "Install Docker: https://docs.docker.com/get-docker/"
+
+
+def require_docker() -> None:
+    """Pre-flight check: ensure Docker is installed and the daemon is running.
+
+    Call this at the top of any command that needs Docker. It gives the user
+    a clear, actionable error immediately — before any YAML parsing, template
+    rendering, or image building takes place.
+    """
+    # 1. Is the `docker` CLI binary on PATH?
+    if not shutil.which("docker"):
+        console.print()
+        console.print(Panel(
+            "[red bold]Docker is not installed[/red bold]\n\n"
+            "Ninetrix packages agents as Docker containers.\n"
+            "You need Docker installed to build and run agents.\n\n"
+            f"[dim]{_docker_install_hint()}[/dim]",
+            title="[red]Missing dependency[/red]",
+            border_style="red",
+        ))
+        sys.exit(1)
+
+    # 2. Can we connect to the Docker daemon?
+    try:
+        client = docker.from_env()
+        client.ping()
+    except DockerException:
+        console.print()
+        console.print(Panel(
+            "[red bold]Docker daemon is not running[/red bold]\n\n"
+            "The Docker CLI is installed but the daemon isn't responding.\n"
+            "Start Docker Desktop or the Docker service and try again.\n\n"
+            + (
+                "[dim]macOS: open /Applications/Docker.app\n"
+                "Linux: sudo systemctl start docker[/dim]"
+                if platform.system() in ("Darwin", "Linux")
+                else "[dim]Start Docker Desktop from the Start menu.[/dim]"
+            ),
+            title="[red]Docker not running[/red]",
+            border_style="red",
+        ))
+        sys.exit(1)
 
 
 def _client() -> docker.DockerClient:
