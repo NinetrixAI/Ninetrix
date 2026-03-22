@@ -397,7 +397,7 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     # Auto-prompt channel setup if agentfile has channel triggers
     channel_triggers = [t for t in eff_triggers if t.type == "channel"]
     if channel_triggers:
-        from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg, save_channel as _save_ch_cfg
+        from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg
         from agentfile.commands.channel import setup_telegram_interactive
         for ct in channel_triggers:
             for ch_type in ct.channels:
@@ -407,7 +407,7 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
                         _synced = _try_sync_channel_from_api("telegram")
                     if not is_verified("telegram"):
                         console.print(
-                            f"  [yellow]📱 Telegram channel detected but not configured.[/yellow]\n"
+                            "  [yellow]📱 Telegram channel detected but not configured.[/yellow]\n"
                         )
                         ok = setup_telegram_interactive(agent_name=agent.name)
                         if not ok:

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import click
 import httpx
@@ -276,8 +275,8 @@ def connect_cmd(integration_id: str, no_browser: bool) -> None:
             )
     except Exception:
         console.print(
-            f"  [yellow]⚠[/yellow]  Could not verify connection status.\n"
-            f"  If you completed the OAuth flow, it should be active.\n"
+            "  [yellow]⚠[/yellow]  Could not verify connection status.\n"
+            "  If you completed the OAuth flow, it should be active.\n"
         )
 
 

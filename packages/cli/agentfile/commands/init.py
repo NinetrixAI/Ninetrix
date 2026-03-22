@@ -145,7 +145,7 @@ def init_cmd(name: str | None, provider: str | None, yes: bool, output: str) -> 
             api_key = Prompt.ask(f"  Enter your {provider_display} API key")
             if api_key.strip():
                 _save_api_key_to_dotenv(env_var, api_key.strip())
-                console.print(f"  [green]✓[/green] Saved to .env\n")
+                console.print("  [green]✓[/green] Saved to .env\n")
             else:
                 console.print(f"  [dim]Skipped. Set {env_var} in .env or your shell before running.[/dim]\n")
 

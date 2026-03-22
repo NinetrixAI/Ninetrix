@@ -11,12 +11,10 @@ from agentfile.core.models import (
     AgentFile,
     Execution,
     Governance,
-    HumanApproval,
     MCPGatewayConfig,
     ThinkingConfig,
     Tool,
     Trigger,
-    Verifier,
     VolumeSpec,
 )
 from agentfile.core.template_context import build_context

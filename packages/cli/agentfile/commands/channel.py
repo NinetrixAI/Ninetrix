@@ -16,7 +16,7 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 
 from agentfile.core.channel_config import (
-    get_channel, save_channel, remove_channel, is_configured, is_verified,
+    get_channel, save_channel, remove_channel,
 )
 
 console = Console()
@@ -232,7 +232,7 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
             break
 
     if not verified:
-        console.print(f"\r  [yellow]⏱[/yellow] Timed out waiting for /start. You can retry with: [bold]ninetrix channel connect telegram[/bold]   ")
+        console.print("\r  [yellow]⏱[/yellow] Timed out waiting for /start. You can retry with: [bold]ninetrix channel connect telegram[/bold]   ")
         return False
 
     # Acknowledge the update offset so it doesn't replay
@@ -263,7 +263,7 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
 
     console.print()
     console.print(f"  [green]Done![/green] Messages to [bold]@{bot_username}[/bold] will trigger your agent.")
-    console.print(f"  [dim]Config saved to ~/.agentfile/channels.yaml[/dim]")
+    console.print("  [dim]Config saved to ~/.agentfile/channels.yaml[/dim]")
     console.print()
 
     return True
@@ -301,7 +301,7 @@ def disconnect(platform: str):
 
     remove_channel(platform)
     console.print(f"  [green]✓[/green] {platform} disconnected.")
-    console.print(f"  [dim]Removed from ~/.agentfile/channels.yaml[/dim]")
+    console.print("  [dim]Removed from ~/.agentfile/channels.yaml[/dim]")
 
 
 @channel_cmd.command("status")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from agentfile.core.mcp_catalog import CATALOG, CatalogEntry, get, list_all
 

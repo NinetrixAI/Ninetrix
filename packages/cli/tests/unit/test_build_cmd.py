@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentfile.core.models import AgentDef, AgentFile, Governance, Tool
+from agentfile.core.models import AgentFile
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -252,7 +252,6 @@ class TestBuildOne:
     @patch("shutil.copy")
     def test_returns_success_tuple(self, mock_copy, mock_render, valid_yaml: Path):
         """_build_one returns (True, full_tag, log_lines) on success."""
-        import docker as _docker
 
         mock_client = MagicMock()
         mock_img = MagicMock()

@@ -175,10 +175,10 @@ def build_image(context_dir: Path, image_name: str, tag: str = "latest") -> str:
     if apt_matches or npm_matches or pip_matches:
         all_bad = apt_matches + npm_matches + pip_matches
         console.print(f"\n  [red]✗[/red] Package not found: [bold]{', '.join(all_bad)}[/bold]")
-        console.print(f"    [dim]Hint: Check the spelling in your agentfile.yaml 'packages' list.[/dim]")
+        console.print("    [dim]Hint: Check the spelling in your agentfile.yaml 'packages' list.[/dim]")
     else:
         # Show last few meaningful lines from the build log
-        error_lines = [l for l in build_log[-20:] if "ERROR" in l or "error" in l.lower()]
+        error_lines = [line for line in build_log[-20:] if "ERROR" in line or "error" in line.lower()]
         msg = error_lines[-1] if error_lines else "see output above"
         console.print(f"\n  [red]✗[/red] Build failed: {msg}")
     sys.exit(1)
@@ -261,7 +261,7 @@ def push_image(image_name: str) -> None:
         with console.status("  [dim]Uploading layers…[/dim]", spinner="dots") as spinner:
             for chunk in client.images.push(image_name, stream=True, decode=True):
                 status = chunk.get("status", "")
-                progress = chunk.get("progressDetail", {})
+                _ = chunk.get("progressDetail", {})
                 if "error" in chunk:
                     console.print(f"[red]Push error:[/red] {chunk['error']}")
                     sys.exit(1)

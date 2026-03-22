@@ -9,16 +9,9 @@ import pytest
 from agentfile.core.models import (
     AgentDef,
     AgentFile,
-    Execution,
     Governance,
     HumanApproval,
-    MCPGatewayConfig,
-    Resources,
-    ThinkingConfig,
     Tool,
-    Trigger,
-    Verifier,
-    VolumeSpec,
 )
 
 

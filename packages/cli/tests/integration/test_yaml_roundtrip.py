@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 import yaml
 
-from agentfile.core.models import AgentFile, LATEST_SCHEMA_VERSION
+from agentfile.core.models import AgentFile
 
 
 class TestMinimalRoundtrip:

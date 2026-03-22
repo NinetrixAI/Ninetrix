@@ -46,7 +46,7 @@ def _check_docker() -> list[tuple[str, str, str]]:
     docker_bin = shutil.which("docker")
     if not docker_bin:
         from agentfile.core.docker import _docker_install_hint
-        results.append(_fail(f"Docker CLI not found on PATH"))
+        results.append(_fail("Docker CLI not found on PATH"))
         results.append(_warn(f"  {_docker_install_hint()}"))
         return results
 

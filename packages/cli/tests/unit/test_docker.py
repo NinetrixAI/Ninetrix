@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -27,35 +26,33 @@ class TestClient:
 
 class TestBuildImage:
     def test_builds_and_returns_tag(self, tmp_path):
-        mock_client = MagicMock()
-        mock_image = MagicMock()
-        mock_client.images.build.return_value = (mock_image, [{"stream": "Step 1/3\n"}])
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["#1 [1/3] FROM python:3.12\n"])
+        mock_proc.wait.return_value = 0
 
-        with patch("agentfile.core.docker._client", return_value=mock_client):
+        with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
             result = build_image(tmp_path, "ninetrix/test", "v1")
 
         assert result == "ninetrix/test:v1"
-        mock_client.images.build.assert_called_once_with(
-            path=str(tmp_path), tag="ninetrix/test:v1", rm=True, forcerm=True,
-        )
 
     def test_tag_already_in_name(self, tmp_path):
-        mock_client = MagicMock()
-        mock_client.images.build.return_value = (MagicMock(), [])
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter([])
+        mock_proc.wait.return_value = 0
 
-        with patch("agentfile.core.docker._client", return_value=mock_client):
+        with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
             result = build_image(tmp_path, "ninetrix/test:custom")
 
         assert result == "ninetrix/test:custom"
 
     def test_exits_on_build_failure(self, tmp_path):
-        from docker.errors import DockerException
-        mock_client = MagicMock()
-        mock_client.images.build.side_effect = DockerException("build failed")
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(["ERROR: build failed\n"])
+        mock_proc.wait.return_value = 1
 
-        with patch("agentfile.core.docker._client", return_value=mock_client):
+        with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
             with pytest.raises(SystemExit):
                 build_image(tmp_path, "ninetrix/test")

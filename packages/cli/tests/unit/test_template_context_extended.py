@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from agentfile.core.models import (
     AgentDef,
@@ -16,9 +15,6 @@ from agentfile.core.models import (
     Skill,
     ThinkingConfig,
     Tool,
-    Trigger,
-    Verifier,
-    VolumeSpec,
 )
 from agentfile.core.template_context import build_context
 

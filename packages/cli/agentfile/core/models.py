@@ -8,13 +8,12 @@ validators, so that consumers see a flat, ergonomic API.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ── Deep merge helper ─────────────────────────────────────────────────────────

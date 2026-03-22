@@ -97,7 +97,7 @@ def migrate_cmd(filepath: str, dry_run: bool) -> None:
         return
 
     if dry_run:
-        console.print(f"\n  [yellow]Dry run[/yellow] — no files modified")
+        console.print("\n  [yellow]Dry run[/yellow] — no files modified")
         return
 
     # Write back

@@ -6,7 +6,6 @@ runner base image renders the agent in-container.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import click
@@ -350,7 +349,7 @@ def _print_summary(results) -> None:
             lines.append("")
             lines.append("  [dim]Example:[/dim]")
             lines.append(f'  [dim]  curl -X POST {r.url}/chat \\[/dim]')
-            lines.append(f'  [dim]    -H "X-API-Token: $NXT_TOKEN" \\[/dim]')
+            lines.append('  [dim]    -H "X-API-Token: $NXT_TOKEN" \\[/dim]')
             lines.append("  [dim]    -d '{\"message\": \"hello\"}'[/dim]")
 
         console.print(Panel(

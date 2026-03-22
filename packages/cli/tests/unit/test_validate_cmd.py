@@ -121,7 +121,6 @@ class TestCheckAgents:
     def test_warns_when_api_key_missing(self, valid_yaml: Path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         from agentfile.commands.validate import _check_schema, _check_agents
-        from agentfile.core.models import AgentFile
 
         _, af = _check_schema(str(valid_yaml), None)
         results = _check_agents(af)

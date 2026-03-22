@@ -5,11 +5,8 @@ All methods are synchronous (httpx) — the CLI is not async.
 """
 from __future__ import annotations
 
-import json
-import os
-import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import httpx
 from rich.console import Console

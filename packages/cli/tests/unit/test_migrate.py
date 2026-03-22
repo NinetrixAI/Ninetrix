@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 import yaml
 
 from agentfile.commands.migrate import (
-    LATEST_VERSION,
     _detect_version,
     _migrate,
     _migrate_1_0_to_1_1,

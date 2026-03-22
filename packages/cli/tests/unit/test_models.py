@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 import yaml
@@ -12,13 +11,11 @@ from agentfile.core.models import (
     AgentFile,
     Execution,
     Governance,
-    HumanApproval,
     MCPGatewayConfig,
     Resources,
     ThinkingConfig,
     Tool,
     Trigger,
-    Verifier,
     VolumeSpec,
     _deep_merge,
     _parse_agent_def,

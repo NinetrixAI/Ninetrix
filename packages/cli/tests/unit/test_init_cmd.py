@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -98,10 +97,10 @@ class TestInitCmd:
     def test_all_providers_produce_valid_yaml(self, tmp_path: Path):
         """Every supported provider generates syntactically valid YAML."""
         from click.testing import CliRunner
-        from agentfile.commands.init import init_cmd, _PROVIDERS
+        from agentfile.commands.init import init_cmd, _PROVIDER_KEYS
 
         runner = CliRunner()
-        for provider in _PROVIDERS:
+        for provider in _PROVIDER_KEYS:
             out = tmp_path / f"{provider}.yaml"
             result = runner.invoke(init_cmd, ["--yes", "--provider", provider, str(out)])
             assert result.exit_code == 0, f"Failed for provider {provider}: {result.output}"
