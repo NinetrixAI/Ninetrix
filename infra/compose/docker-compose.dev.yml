@@ -49,6 +49,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    profiles: ["mcp"]
 
   mcp-worker:
     image: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
@@ -70,6 +71,7 @@ services:
     depends_on:
       mcp-gateway:
         condition: service_healthy
+    profiles: ["mcp"]
 
 volumes:
   ninetrix-data:

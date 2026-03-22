@@ -64,11 +64,18 @@ def _load_dotenv_key(key: str) -> str | None:
 
 
 _KEY_ENV_VARS = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai":    "OPENAI_API_KEY",
-    "google":    "GEMINI_API_KEY",
-    "mistral":   "MISTRAL_API_KEY",
-    "groq":      "GROQ_API_KEY",
+    "anthropic":    "ANTHROPIC_API_KEY",
+    "openai":       "OPENAI_API_KEY",
+    "google":       "GEMINI_API_KEY",
+    "mistral":      "MISTRAL_API_KEY",
+    "groq":         "GROQ_API_KEY",
+    "deepseek":     "DEEPSEEK_API_KEY",
+    "together_ai":  "TOGETHERAI_API_KEY",
+    "openrouter":   "OPENROUTER_API_KEY",
+    "cerebras":     "CEREBRAS_API_KEY",
+    "fireworks_ai": "FIREWORKS_API_KEY",
+    "bedrock":      "AWS_ACCESS_KEY_ID",
+    "azure":        "AZURE_API_KEY",
 }
 
 
@@ -135,6 +142,34 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
                     env.setdefault(key, value)
     except Exception:
         pass
+
+
+def _try_sync_channel_from_api(channel_type: str) -> bool:
+    """Check the local API for a verified channel and sync to channels.yaml.
+
+    Returns True if a verified channel was found and synced.
+    This enables channels set up via the dashboard to work with `ninetrix run`.
+    Uses the internal endpoint that includes bot_token (localhost only).
+    """
+    from agentfile.core.config import resolve_api_url
+    from agentfile.core.channel_config import save_channel
+
+    api_url = resolve_api_url()
+    if not api_url:
+        return False
+    try:
+        resp = httpx.get(f"{api_url}/internal/v1/channels/config", timeout=5)
+        if resp.status_code != 200:
+            return False
+        configs = resp.json()
+        ch_cfg = configs.get(channel_type)
+        if ch_cfg and ch_cfg.get("verified") and ch_cfg.get("bot_token"):
+            save_channel(channel_type, ch_cfg)
+            console.print(f"  [green]✓[/green] Synced {channel_type} channel from dashboard\n")
+            return True
+    except Exception:
+        pass
+    return False
 
 
 @click.command("run")
@@ -362,11 +397,14 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     # Auto-prompt channel setup if agentfile has channel triggers
     channel_triggers = [t for t in eff_triggers if t.type == "channel"]
     if channel_triggers:
-        from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg
+        from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg, save_channel as _save_ch_cfg
         from agentfile.commands.channel import setup_telegram_interactive
         for ct in channel_triggers:
             for ch_type in ct.channels:
                 if ch_type == "telegram":
+                    if not is_verified("telegram"):
+                        # Check if the API has a verified channel (e.g. set up via dashboard)
+                        _synced = _try_sync_channel_from_api("telegram")
                     if not is_verified("telegram"):
                         console.print(
                             f"  [yellow]📱 Telegram channel detected but not configured.[/yellow]\n"

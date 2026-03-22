@@ -234,6 +234,7 @@ class AgentDef(BaseModel):
     tool_timeout: int = 30
     history_window_tokens: int = 90_000
     output_type: Optional[dict[str, Any]] = None
+    builtin: bool = False
     tools: list[Tool] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     governance: Optional[Governance] = None
@@ -360,6 +361,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
 
     return AgentDef(
         name=key,
+        builtin=bool(araw.get("builtin", False)),
         description=str(meta.get("description", "") or ""),
         model=str(runtime.get("model", "claude-sonnet-4-6")),
         provider=str(runtime.get("provider", "anthropic")),
@@ -574,7 +576,11 @@ class AgentFile(BaseModel):
             errors.append("agents: at least one agent is required")
             return errors
 
-        known_providers = ("anthropic", "openai", "google", "mistral", "groq")
+        known_providers = (
+            "anthropic", "openai", "google", "mistral", "groq",
+            "deepseek", "together_ai", "openrouter", "cerebras",
+            "fireworks_ai", "bedrock", "azure",
+        )
 
         for key, agent in self.agents.items():
             prefix = f"agents.{key}"
@@ -595,15 +601,15 @@ class AgentFile(BaseModel):
             if eff_gov.max_budget_per_run <= 0:
                 errors.append(f"{prefix}: governance.max_budget_per_run must be > 0")
 
-            if not agent.tools:
-                errors.append(f"{prefix}: at least one tool is required")
-            _implemented_builtins = {"shell", "filesystem"}
-            _known_builtins = _implemented_builtins | {
-                "edit_file", "glob", "search_in_files", "diff",
-                "python_eval", "process_manager",
-                "web_search", "web_fetch", "http_request",
-                "ask_user", "task_manager", "parallel",
+            if not agent.tools and not agent.builtin:
+                errors.append(f"{prefix}: at least one tool is required (or set builtin: true)")
+            _ALL_BUILTINS = {
+                "bash", "filesystem", "memory", "scheduler",
+                "web_search", "web_browse", "notify", "ask_user",
+                "sub_agent", "code_interpreter",
             }
+            # Backward compat: accept old name "shell" as alias for "bash"
+            _known_builtins = _ALL_BUILTINS | {"shell"}
             for i, tool in enumerate(agent.tools):
                 if not tool.name:
                     errors.append(f"{prefix}.tools[{i}].name is required")

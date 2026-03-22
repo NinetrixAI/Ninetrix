@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Any, Callable, Awaitable
 
+from pathlib import Path
+
 import httpx
 
 from ninetrix_channels.base import InboundMessage
@@ -32,6 +34,59 @@ _CHANNEL_SCAN_INTERVAL = 30
 
 
 OnMessageCallback = Callable[[InboundMessage, dict], Awaitable[None]]
+
+_CHANNELS_YAML = Path.home() / ".agentfile" / "channels.yaml"
+
+
+def _sync_to_channels_yaml(channel_type: str, config: dict) -> None:
+    """Write verified channel config to ~/.agentfile/channels.yaml.
+
+    This keeps the CLI's ChannelBridge in sync with channels created
+    via the dashboard. The CLI reads this file during `ninetrix run`.
+    Uses yaml if available, falls back to writing a simple YAML manually.
+    """
+    try:
+        _CHANNELS_YAML.parent.mkdir(parents=True, exist_ok=True)
+
+        existing: dict = {}
+        if _CHANNELS_YAML.exists():
+            try:
+                import yaml
+                with open(_CHANNELS_YAML) as f:
+                    existing = yaml.safe_load(f) or {}
+                if not isinstance(existing, dict):
+                    existing = {}
+            except ImportError:
+                existing = {}
+
+        existing[channel_type] = {
+            "bot_token": config.get("bot_token", ""),
+            "bot_username": config.get("bot_username", ""),
+            "chat_id": config.get("chat_id", ""),
+            "verified": True,
+        }
+
+        try:
+            import yaml
+            with open(_CHANNELS_YAML, "w") as f:
+                yaml.dump(existing, f, default_flow_style=False)
+        except ImportError:
+            # Fallback: write simple YAML without pyyaml
+            lines = []
+            for ctype, cdata in existing.items():
+                lines.append(f"{ctype}:")
+                for k, v in cdata.items():
+                    if isinstance(v, bool):
+                        lines.append(f"  {k}: {'true' if v else 'false'}")
+                    else:
+                        lines.append(f"  {k}: '{v}'")
+            with open(_CHANNELS_YAML, "w") as f:
+                f.write("\n".join(lines) + "\n")
+
+        _CHANNELS_YAML.chmod(0o600)
+        logger.info("Synced %s channel to %s", channel_type, _CHANNELS_YAML)
+    except Exception:
+        logger.warning("Failed to sync channel to channels.yaml", exc_info=True)
 
 
 class ChannelPoller:
@@ -80,9 +135,14 @@ class ChannelPoller:
             await asyncio.sleep(_CHANNEL_SCAN_INTERVAL)
 
     async def _sync_channels(self) -> None:
-        """Sync running polling tasks with verified channels in DB."""
+        """Sync running polling tasks with UNVERIFIED channels in DB.
+
+        Only polls unverified channels — they need polling to receive /start
+        and 6-digit verification codes from users. Once verified, the CLI's
+        ChannelBridge (started by `ninetrix run`) takes over polling.
+        """
         rows = await self._pool.fetch(
-            "SELECT id, channel_type, config FROM channels WHERE verified = TRUE AND enabled = TRUE"
+            "SELECT id, channel_type, config FROM channels WHERE enabled = TRUE AND verified = FALSE"
         )
 
         active_ids = set()
@@ -225,6 +285,8 @@ class ChannelPoller:
                     "UPDATE channels SET config = $2::jsonb, verified = TRUE, updated_at = NOW() WHERE id = $1",
                     row["id"], json.dumps(config),
                 )
+                # Sync to ~/.agentfile/channels.yaml so `ninetrix run` can find it
+                _sync_to_channels_yaml("telegram", config)
                 await self._send_telegram(bot_token, chat_id,
                     "Channel verified! Messages you send here will now trigger agent runs."
                 )

@@ -15,7 +15,7 @@ from rich.table import Table
 
 console = Console()
 
-_STACK = [
+_CORE_STACK = [
     {
         "name": "postgres",
         "health_url": None,
@@ -26,6 +26,9 @@ _STACK = [
         "health_url": "http://localhost:8000/health",
         "display_port": "http://localhost:8000",
     },
+]
+
+_MCP_STACK = [
     {
         "name": "mcp-gateway",
         "health_url": "http://localhost:9090/health",
@@ -162,17 +165,34 @@ def _compose_env(secret: str) -> dict:
     return env
 
 
-def _compose(compose_file: Path, *args: str, secret: str = "", check: bool = True) -> subprocess.CompletedProcess:
+def _profile_args(profiles: list[str] | None) -> list[str]:
+    """Build --profile flags for docker compose CLI."""
+    if not profiles:
+        return []
+    args = []
+    for p in profiles:
+        args.extend(["--profile", p])
+    return args
+
+
+def _compose(
+    compose_file: Path, *args: str,
+    secret: str = "", profiles: list[str] | None = None, check: bool = True,
+) -> subprocess.CompletedProcess:
+    cmd = ["docker", "compose", "-f", str(compose_file), *_profile_args(profiles), *args]
     return subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), *args],
+        cmd,
         check=check,
         env=_compose_env(secret) if secret else None,
     )
 
 
-def _compose_up(compose_file: Path, pull: bool, secret: str) -> None:
+def _compose_up(compose_file: Path, pull: bool, secret: str, profiles: list[str] | None = None) -> None:
     from rich.live import Live
     from rich.spinner import Spinner
+
+    env = _compose_env(secret)
+    pargs = _profile_args(profiles)
 
     if pull:
         with Live(
@@ -182,9 +202,9 @@ def _compose_up(compose_file: Path, pull: bool, secret: str) -> None:
             transient=True,
         ):
             pull_result = subprocess.run(
-                ["docker", "compose", "-f", str(compose_file), "pull"],
+                ["docker", "compose", "-f", str(compose_file), *pargs, "pull"],
                 capture_output=True,
-                env=_compose_env(secret),
+                env=env,
             )
         if pull_result.returncode != 0:
             console.print("  [yellow]Registry unavailable — building locally…[/yellow]")
@@ -195,9 +215,9 @@ def _compose_up(compose_file: Path, pull: bool, secret: str) -> None:
                 transient=True,
             ):
                 subprocess.run(
-                    ["docker", "compose", "-f", str(compose_file), "build"],
+                    ["docker", "compose", "-f", str(compose_file), *pargs, "build"],
                     capture_output=True,
-                    env=_compose_env(secret),
+                    env=env,
                 )
         else:
             console.print("  [green]✓[/green] Images up to date")
@@ -209,10 +229,10 @@ def _compose_up(compose_file: Path, pull: bool, secret: str) -> None:
         transient=True,
     ):
         result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
+            ["docker", "compose", "-f", str(compose_file), *pargs, "up", "-d", "--remove-orphans"],
             capture_output=True,
             text=True,
-            env=_compose_env(secret),
+            env=env,
         )
 
     if result.returncode != 0:
@@ -257,13 +277,13 @@ def _container_state(compose_file: Path, service: str) -> str:
         return "unknown"
 
 
-def _poll_health(compose_file: Path, timeout: int = 60) -> dict[str, bool]:
+def _poll_health(compose_file: Path, stack: list[dict], timeout: int = 60) -> dict[str, bool]:
     """Poll HTTP health endpoints and container states."""
-    status = {s["name"]: False for s in _STACK}
+    status = {s["name"]: False for s in stack}
     deadline = time.time() + timeout
 
     while time.time() < deadline:
-        for svc in _STACK:
+        for svc in stack:
             if status[svc["name"]]:
                 continue
             url = svc["health_url"]
@@ -302,13 +322,13 @@ def _failed_logs(compose_file: Path, status: dict[str, bool]) -> str:
     return "\n".join(lines)
 
 
-def _status_table(status: dict[str, bool], final: bool = False) -> Table:
+def _status_table(status: dict[str, bool], stack: list[dict], final: bool = False) -> Table:
     table = Table(box=None, padding=(0, 2), show_header=False)
     table.add_column(style="bold")
     table.add_column()
     table.add_column(style="dim")
 
-    for svc in _STACK:
+    for svc in stack:
         name = svc["name"]
         ok = status.get(name, False)
         if ok:
@@ -333,17 +353,17 @@ def _status_table(status: dict[str, bool], final: bool = False) -> Table:
 @click.option("--pull", is_flag=True, default=False, help="Pull latest images before starting.")
 @click.option("--reset", is_flag=True, default=False, help="Wipe all volumes and restart from scratch.")
 @click.option("--detach", "-d", is_flag=True, default=False, help="Start stack and exit without streaming logs.")
-def dev_command(pull: bool, reset: bool, detach: bool) -> None:
-    """Start the full local Ninetrix stack.
+@click.option("--mcp/--no-mcp", default=None, help="Include MCP gateway + worker (prompts if omitted).")
+def dev_command(pull: bool, reset: bool, detach: bool, mcp: bool | None) -> None:
+    """Start the local Ninetrix stack.
 
-    Starts PostgreSQL, the API server, MCP gateway, and MCP worker
-    via Docker Compose, waits for each service to become healthy,
-    then streams logs. Press Ctrl+C for a clean shutdown.
+    Starts PostgreSQL and the API server. Optionally includes the MCP
+    gateway and worker (for agents that use mcp:// tools).
 
     \b
     Agents should set:
       AGENTFILE_API_URL=http://localhost:8000
-      MCP_GATEWAY_URL=http://localhost:9090
+      MCP_GATEWAY_URL=http://localhost:9090   (only if --mcp)
     """
     console.print()
     console.rule("[bold cyan]  Ninetrix Dev  [/bold cyan]")
@@ -351,14 +371,34 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
 
     _check_docker()
     compose_file = _get_compose_file()
-    _ensure_mcp_worker_config()
     secret = _ensure_host_secret()
+
+    # Prompt for MCP if not specified
+    if mcp is None:
+        from rich.prompt import Confirm
+        mcp = Confirm.ask("  Include MCP tools stack (gateway + worker)?", default=False)
+
+    profiles: list[str] = []
+    stack = list(_CORE_STACK)
+    if mcp:
+        profiles.append("mcp")
+        stack.extend(_MCP_STACK)
+        _ensure_mcp_worker_config()
+        console.print("  [dim]MCP stack enabled[/dim]\n")
+    else:
+        # Stop any leftover MCP containers from a previous --mcp run
+        subprocess.run(
+            ["docker", "compose", "-f", str(compose_file), "--profile", "mcp",
+             "rm", "-f", "-s", "mcp-gateway", "mcp-worker"],
+            capture_output=True, env=_compose_env(secret),
+        )
+        console.print("  [dim]Core only (no MCP). Use --mcp to include tools.[/dim]\n")
 
     if reset:
         console.print("[yellow]Wiping volumes…[/yellow]")
-        _compose(compose_file, "down", "-v", secret=secret, check=False)
+        _compose(compose_file, "down", "-v", secret=secret, profiles=["mcp"], check=False)
 
-    _compose_up(compose_file, pull=pull, secret=secret)
+    _compose_up(compose_file, pull=pull, secret=secret, profiles=profiles)
 
     # Live-update the status while polling — spinner + table, no duplicate print
     from rich.live import Live
@@ -366,16 +406,16 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
     from rich.spinner import Spinner
 
     spin = Spinner("dots", text="  Waiting for services…")
-    init_status = {s["name"]: False for s in _STACK}
-    with Live(Group(spin, _status_table(init_status)), console=console, refresh_per_second=8) as live:
+    init_status = {s["name"]: False for s in stack}
+    with Live(Group(spin, _status_table(init_status, stack)), console=console, refresh_per_second=8) as live:
         for _ in range(60):
-            status = _poll_health(compose_file, timeout=2)
+            status = _poll_health(compose_file, stack, timeout=2)
             if all(status.values()):
-                live.update(_status_table(status, final=True))
+                live.update(_status_table(status, stack, final=True))
                 break
-            live.update(Group(spin, _status_table(status, final=False)))
+            live.update(Group(spin, _status_table(status, stack, final=False)))
         else:
-            live.update(_status_table(status, final=True))
+            live.update(_status_table(status, stack, final=True))
 
     failed = [k for k, v in status.items() if not v]
     if failed:
@@ -390,7 +430,7 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
 
     # Stream logs until Ctrl+C
     log_proc = subprocess.Popen(
-        ["docker", "compose", "-f", str(compose_file), "logs", "-f", "--no-log-prefix"],
+        ["docker", "compose", "-f", str(compose_file), *_profile_args(profiles), "logs", "-f", "--no-log-prefix"],
         stdout=sys.stdout,
         stderr=sys.stderr,
         env=_compose_env(secret),
@@ -400,5 +440,5 @@ def dev_command(pull: bool, reset: bool, detach: bool) -> None:
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopping services…[/yellow]")
         log_proc.terminate()
-        _compose(compose_file, "down", secret=secret, check=False)
+        _compose(compose_file, "down", secret=secret, profiles=profiles, check=False)
         console.print("[green]All services stopped.[/green]")
