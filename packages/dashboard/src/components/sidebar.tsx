@@ -2,7 +2,10 @@
 
 import { useState, useMemo } from "react";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import type { AgentStats, ApiStatus, Channel } from "@/lib/api";
+
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/dashboard";
 import { normalizeStatus } from "@/lib/utils";
 import ThemeToggle from "@/components/theme-toggle";
 import { CreateChannelDialog, ManageChannelDialog } from "@/components/channel-dialog";
@@ -238,8 +241,9 @@ export default function Sidebar({ agents, channels, apiStatus, autoRefresh, onTo
           className="flex items-center gap-2.5 shrink-0"
           style={{ padding: "20px 20px 16px" }}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/ninetrix-logo.png"
+            src={`${BASE_PATH}/ninetrix-logo.png`}
             alt="Ninetrix"
             width={28}
             height={28}
@@ -264,10 +268,11 @@ export default function Sidebar({ agents, channels, apiStatus, autoRefresh, onTo
         {/* Navigation */}
         <nav className="flex flex-col gap-0.5" style={{ padding: "12px 12px" }}>
           {NAV_ITEMS.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(item.href + "/");
+            const fullHref = `${BASE_PATH}${item.href}`;
+            const active = pathname === fullHref || pathname.startsWith(fullHref + "/");
             const Icon = item.icon;
             return (
-              <a
+              <Link
                 key={item.href}
                 href={item.href}
                 className="flex items-center gap-2.5 no-underline transition-colors"
@@ -283,7 +288,7 @@ export default function Sidebar({ agents, channels, apiStatus, autoRefresh, onTo
               >
                 <Icon active={active} />
                 {item.label}
-              </a>
+              </Link>
             );
           })}
         </nav>
