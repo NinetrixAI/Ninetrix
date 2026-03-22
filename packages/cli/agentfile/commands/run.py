@@ -88,6 +88,7 @@ _KEY_ENV_VARS = {
     "fireworks_ai": "FIREWORKS_API_KEY",
     "bedrock":      "AWS_ACCESS_KEY_ID",
     "azure":        "AZURE_API_KEY",
+    "minimax":      "MINIMAX_API_KEY",
 }
 
 

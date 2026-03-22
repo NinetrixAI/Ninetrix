@@ -29,6 +29,7 @@ PROVIDERS = [
     ("fireworks_ai", "Fireworks",     "fireworks_ai/accounts/fireworks/models/llama-v3p3-70b-instruct", "FIREWORKS_API_KEY"),
     ("bedrock",      "AWS Bedrock",   "bedrock/anthropic.claude-sonnet-4-6-20250514-v1:0", "AWS_ACCESS_KEY_ID"),
     ("azure",        "Azure OpenAI",  "azure/gpt-4o",               "AZURE_API_KEY"),
+    ("minimax",      "MiniMax",       "MiniMax-M2.1",               "MINIMAX_API_KEY"),
 ]
 
 _PROVIDER_KEYS = [p[0] for p in PROVIDERS]

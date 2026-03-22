@@ -630,7 +630,7 @@ class AgentFile(BaseModel):
         known_providers = (
             "anthropic", "openai", "google", "mistral", "groq",
             "deepseek", "together_ai", "openrouter", "cerebras",
-            "fireworks_ai", "bedrock", "azure",
+            "fireworks_ai", "bedrock", "azure", "minimax",
         )
 
         for key, agent in self.agents.items():

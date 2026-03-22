@@ -64,6 +64,7 @@ _PROVIDER_PREFIX = {
     "fireworks_ai": "fireworks_ai",
     "bedrock":      "bedrock",
     "azure":        "azure",
+    "minimax":      "minimax",
 }
 _API_KEY_VARS = {
     "anthropic":    "ANTHROPIC_API_KEY",
@@ -78,9 +79,11 @@ _API_KEY_VARS = {
     "fireworks_ai": "FIREWORKS_API_KEY",
     "bedrock":      "AWS_ACCESS_KEY_ID",
     "azure":        "AZURE_API_KEY",
+    "minimax":      "MINIMAX_API_KEY",
 }
 _prefix = _PROVIDER_PREFIX.get(PROVIDER, PROVIDER)
-LITELLM_MODEL = f"{_prefix}/{MODEL}"
+# Avoid double-prefixing if model already includes the provider prefix
+LITELLM_MODEL = MODEL if MODEL.startswith(f"{_prefix}/") else f"{_prefix}/{MODEL}"
 
 _api_key_var = _API_KEY_VARS.get(PROVIDER)
 if _api_key_var and not os.environ.get(_api_key_var):
