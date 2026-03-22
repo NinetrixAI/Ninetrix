@@ -18,7 +18,8 @@ from models import ApiKeyPayload, IntegrationCatalogItem, IntegrationTool
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
-# Maps (integration_id, key_name) → env var injected into agent containers
+# Maps (integration_id, key_name) → env var injected into agent containers.
+# Hardcoded fallback — the Tool Hub registry is the primary source of truth.
 _CRED_ENV_MAP: dict[str, dict[str, str]] = {
     "github":   {"access_token": "GITHUB_TOKEN"},
     "slack":    {"access_token": "SLACK_BOT_TOKEN", "team_id": "SLACK_TEAM_ID"},

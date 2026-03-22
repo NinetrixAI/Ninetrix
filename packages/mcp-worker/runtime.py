@@ -20,19 +20,82 @@ import saas_client
 
 log = logging.getLogger(__name__)
 
-# Integrations whose MCP package is known — maps server name → npx package
-# Add entries here as new managed integrations are supported.
-_MANAGED_PACKAGES: dict[str, str] = {
+# Managed MCP packages — maps server name → npx package.
+# Populated from the Tool Hub registry at boot, with a hardcoded fallback for
+# offline resilience. Adding a new integration only requires a PR to tools-hub.
+_MANAGED_PACKAGES_FALLBACK: dict[str, str] = {
     "github":        "@modelcontextprotocol/server-github",
     "slack":         "@modelcontextprotocol/server-slack",
     "notion":        "@notionhq/notion-mcp-server",
     "google-drive":  "@modelcontextprotocol/server-google-drive",
-    "google-sheets": "@modelcontextprotocol/server-google-drive",  # uses same package
+    "google-sheets": "@modelcontextprotocol/server-google-drive",
     "google-docs":   "@modelcontextprotocol/server-google-drive",
     "tavily":        "tavily-mcp",
     "brave-search":  "@modelcontextprotocol/server-brave-search",
     "filesystem":    "@modelcontextprotocol/server-filesystem",
+    "duckduckgo":    "@nicepkg/duckduckgo-mcp-server",
 }
+
+_managed_packages_cache: dict[str, str] | None = None
+
+
+def _get_managed_packages() -> dict[str, str]:
+    """Return server_name → package mapping from the Tool Hub registry.
+
+    Falls back to the hardcoded dict if the hub is unreachable.
+    """
+    global _managed_packages_cache
+    if _managed_packages_cache is not None:
+        return _managed_packages_cache
+
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://raw.githubusercontent.com/Ninetrix-ai/tools-hub/main/registry.json",
+            timeout=10, follow_redirects=True,
+        )
+        if resp.status_code == 200:
+            import json
+            registry = json.loads(resp.text)
+            result = {}
+            for name, tool in registry.get("tools", {}).items():
+                source = tool.get("source", {})
+                if source.get("type") == "mcp" and source.get("package"):
+                    result[name] = source["package"]
+            if result:
+                _managed_packages_cache = result
+                log.info("Loaded %d managed packages from Tool Hub", len(result))
+                return result
+    except Exception as exc:
+        log.debug("Tool Hub fetch failed, using fallback: %s", exc)
+
+    _managed_packages_cache = dict(_MANAGED_PACKAGES_FALLBACK)
+    return _managed_packages_cache
+
+
+# Keep a module-level alias so existing code referencing _MANAGED_PACKAGES still works.
+# This is a lazy property — first access triggers the hub fetch.
+class _ManagedPackagesProxy(dict):
+    """Dict-like proxy that fetches from Tool Hub on first access."""
+    _loaded = False
+    def _ensure(self):
+        if not self._loaded:
+            self.update(_get_managed_packages())
+            self._loaded = True
+    def __contains__(self, key):
+        self._ensure()
+        return super().__contains__(key)
+    def __getitem__(self, key):
+        self._ensure()
+        return super().__getitem__(key)
+    def get(self, key, default=None):
+        self._ensure()
+        return super().get(key, default)
+    def __iter__(self):
+        self._ensure()
+        return super().__iter__()
+
+_MANAGED_PACKAGES = _ManagedPackagesProxy()
 
 
 class ServerPool:

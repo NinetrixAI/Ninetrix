@@ -18,8 +18,10 @@ from ninetrix_api.models import ApiKeyPayload, IntegrationCatalogItem, Integrati
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
-# Maps (integration_id, key_name) → env var injected into agent containers
-_CRED_ENV_MAP: dict[str, dict[str, str]] = {
+# Maps (integration_id, key_name) → env var injected into agent containers.
+# Populated from the Tool Hub registry when available, with a hardcoded fallback.
+# Adding a new integration only requires a PR to the tools-hub repo.
+_CRED_ENV_MAP_FALLBACK: dict[str, dict[str, str]] = {
     "github":   {"access_token": "GITHUB_TOKEN"},
     "slack":    {"access_token": "SLACK_BOT_TOKEN", "team_id": "SLACK_TEAM_ID"},
     "notion":   {"access_token": "NOTION_TOKEN"},
@@ -28,6 +30,48 @@ _CRED_ENV_MAP: dict[str, dict[str, str]] = {
     "openai":   {"api_key": "OPENAI_API_KEY"},
     "sendgrid": {"api_key": "SENDGRID_API_KEY"},
 }
+
+_cred_env_map_cache: dict[str, dict[str, str]] | None = None
+
+
+def _get_cred_env_map() -> dict[str, dict[str, str]]:
+    """Return integration → {key_name: env_var} mapping from the Tool Hub.
+
+    Falls back to the hardcoded dict if the hub is unreachable.
+    """
+    global _cred_env_map_cache
+    if _cred_env_map_cache is not None:
+        return _cred_env_map_cache
+
+    try:
+        import httpx
+        resp = httpx.get(
+            "https://raw.githubusercontent.com/Ninetrix-ai/tools-hub/main/registry.json",
+            timeout=10, follow_redirects=True,
+        )
+        if resp.status_code == 200:
+            import json as _json
+            registry = _json.loads(resp.text)
+            result: dict[str, dict[str, str]] = {}
+            for name, tool in registry.get("tools", {}).items():
+                creds = tool.get("credentials", {})
+                if creds:
+                    # Convert {VAR_NAME: {label, required}} → {key: VAR_NAME}
+                    result[name] = {
+                        var_name.lower().replace("_", "_"): var_name
+                        for var_name in creds
+                    }
+            if result:
+                _cred_env_map_cache = result
+                return result
+    except Exception:
+        pass
+
+    _cred_env_map_cache = dict(_CRED_ENV_MAP_FALLBACK)
+    return _cred_env_map_cache
+
+
+_CRED_ENV_MAP = _CRED_ENV_MAP_FALLBACK  # backwards compat alias
 
 _OAUTH_CLIENT_ID_VARS = {
     "github": "GITHUB_CLIENT_ID",

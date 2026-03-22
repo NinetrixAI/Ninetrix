@@ -137,6 +137,7 @@ class AgentStats(BaseModel):
     models: list[str]
     last_seen: datetime
     last_status: str
+    last_heartbeat: datetime | None = None
 
 
 # ── Organization tokens ────────────────────────────────────────────────────────

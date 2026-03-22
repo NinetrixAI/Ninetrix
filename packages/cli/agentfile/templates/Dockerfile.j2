@@ -9,12 +9,13 @@ LABEL org.opencontainers.image.description="{{ agent.description }}"
 LABEL org.opencontainers.image.source="https://github.com/ninetrix/ninetrix"
 
 WORKDIR /app
-{% if has_apt_packages %}
+{% if collected_deps.apt or has_apt_packages %}
 
 # System packages (apt) — cache mounts survive across builds
 RUN --mount=type=cache,target=/var/cache/apt \
     --mount=type=cache,target=/var/lib/apt/lists \
-    apt-get update && apt-get install -y --no-install-recommends {{ apt_packages | join(' ') }}
+    apt-get update && apt-get install -y --no-install-recommends{% for _p in collected_deps.apt %} {{ _p }}{% endfor %}{% for _p in apt_packages %} {{ _p }}{% endfor %}
+
 {% endif %}
 {% if has_npm_packages %}
 
@@ -22,59 +23,23 @@ RUN --mount=type=cache,target=/var/cache/apt \
 RUN --mount=type=cache,target=/root/.npm \
     npm install -g {{ npm_packages | join(' ') }}
 {% endif %}
-{% if has_pip_packages %}
 
-# pip packages — cache mount reuses downloaded packages
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install {{ pip_packages | join(' ') }}
-{% endif %}
-
-{% set _pkgs = ["litellm>=1.50,<2.0"] -%}
-{% if use_mcp_gateway -%}{% set _pkgs = _pkgs + ["httpx>=0.27"] -%}{% endif -%}
-{% if agent.tools -%}{% set _pkgs = _pkgs + ["requests>=2.31"] -%}{% endif -%}
-{% set _pkgs = _pkgs + ["pyyaml>=6.0", "rich>=13"] -%}
-# Install Python runtime dependencies
+# Install Python runtime dependencies + ninetrix-sdk
 # litellm pin: review quarterly — litellm has a history of breaking changes
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install{% for _pkg in _pkgs %} \
+    pip install \
+    "litellm>=1.50,<2.0" \
+    "pyyaml>=6.0" \
+    "rich>=13" \
+    "ninetrix-sdk"{% for _pkg in collected_deps.pip %} \
+    "{{ _pkg }}"{% endfor %}{% for _pkg in pip_packages %} \
     "{{ _pkg }}"{% endfor %}
-{% if has_composio_tools %}
 
-# Install Composio SDK
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install composio
-{% endif %}
-{% if has_s3_volumes %}
-
-# Install AWS CLI for S3 volume sync
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install awscli
-{% endif %}
-{% if has_webhook_triggers or is_multi_agent or is_saas_runner or has_invoke_server %}
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "fastapi>=0.104" "uvicorn[standard]>=0.24"
-{% endif %}
-{% if has_schedule_triggers %}
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "apscheduler>=3.10"
-{% endif %}
-{% if has_collaborators %}
-
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install "aiohttp>=3.9"
-{% endif %}
 # Copy the agentfile
 COPY agentfile.yaml /app/agentfile.yaml
 
 # Copy agent entrypoint
 COPY entrypoint.py /app/entrypoint.py
-
-# Bundle ninetrix SDK — importable via /app on sys.path (no PyPI required)
-# COPY ninetrix/ /app/ninetrix/
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install ninetrix-sdk
 {% if has_local_tools %}
 
 # Copy local @Tool Python files

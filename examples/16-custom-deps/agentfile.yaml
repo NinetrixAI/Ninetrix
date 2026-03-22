@@ -1,0 +1,39 @@
+schema_version: "1.1"
+
+# Example: Tools with custom pip + apt dependencies
+# Demonstrates the `dependencies:` field for local tools.
+
+agents:
+  doc-reader:
+    metadata:
+      name: doc-reader
+      description: Reads text from images and documents using OCR
+      role: Document analysis assistant
+      goal: Extract and summarize text from images, PDFs, and scanned documents
+      instructions: |
+        You help users extract text from images using OCR.
+        Use the extract_text tool to process images.
+        Use the analyze_pdf tool to read PDF files.
+        Always report confidence and any issues with the OCR output.
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.1
+
+    tools:
+      # Local tool that needs system packages (tesseract) + pip packages
+      - name: ocr
+        source: ./tools/ocr_tools.py
+        dependencies:
+          pip:
+            - pytesseract>=0.3
+            - Pillow>=10.0
+            - pymupdf>=1.24       # for PDF reading
+          apt:
+            - tesseract-ocr
+            - tesseract-ocr-eng
+
+      # Builtin shell for file operations
+      - name: shell
+        source: builtin://bash

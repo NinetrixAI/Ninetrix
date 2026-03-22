@@ -1,0 +1,56 @@
+schema_version: "1.1"
+
+# Example: OpenAPI tools + local tools + MCP tools in one agent
+# Demonstrates the modular tool provider system.
+
+agents:
+  api-assistant:
+    metadata:
+      name: api-assistant
+      description: An agent that can query any REST API via OpenAPI specs
+      role: API integration specialist
+      goal: Help users interact with REST APIs by making the right API calls
+      instructions: |
+        You have access to multiple APIs via OpenAPI tool sources.
+        Each API's operations are exposed as callable tools.
+        Use the petstore tools to manage pets, and the httpbin tools to test HTTP.
+        When in doubt, list available operations first.
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.1
+
+    tools:
+      # ── OpenAPI tools: any REST API with a spec becomes callable ──────
+      - name: petstore
+        source: openapi://https://petstore3.swagger.io/api/v3/openapi.json
+        actions:                    # only expose these operationIds
+          - findPetsByStatus
+          - getPetById
+          - addPet
+        auth:
+          type: bearer
+          token: ${PETSTORE_API_KEY}
+
+      # ── OpenAPI with base_url override ────────────────────────────────
+      - name: httpbin
+        source: openapi://https://raw.githubusercontent.com/postmanlabs/httpbin/master/httpbin/spec.json
+        actions:
+          - get__get
+          - post__post
+        base_url: https://httpbin.org
+
+      # ── MCP tools (unchanged — still works) ──────────────────────────
+      - name: web_search
+        source: mcp://duckduckgo
+
+      # ── Local tools with custom dependencies ─────────────────────────
+      - name: helpers
+        source: ./tools/helpers.py
+        dependencies:
+          pip: ["requests>=2.31"]
+
+      # ── Builtin tools (unchanged — still works) ──────────────────────
+      - name: shell
+        source: builtin://bash

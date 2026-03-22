@@ -68,6 +68,40 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/internal/auth/token")
+async def dashboard_token():
+    """Return the machine secret for the local dashboard.
+
+    Safe because this API only binds to localhost — same trust boundary as
+    the filesystem where ~/.agentfile/.api-secret lives.
+    """
+    from ninetrix_api.auth import _machine_secret
+    return {"token": _machine_secret}
+
+
+@app.get("/internal/v1/channels/config")
+async def channels_config():
+    """Return verified channel configs including secrets (bot_token).
+
+    Used by the CLI to sync dashboard-created channels to channels.yaml.
+    Internal-only — same localhost trust boundary.
+    """
+    import json
+    rows = await db.pool().fetch(
+        "SELECT channel_type, config FROM channels WHERE verified = TRUE AND enabled = TRUE"
+    )
+    result = {}
+    for r in rows:
+        cfg = r["config"] if isinstance(r["config"], dict) else json.loads(r["config"])
+        result[r["channel_type"]] = {
+            "bot_token": cfg.get("bot_token", ""),
+            "bot_username": cfg.get("bot_username", ""),
+            "chat_id": cfg.get("chat_id", ""),
+            "verified": True,
+        }
+    return result
+
+
 @app.get("/")
 async def root():
     return RedirectResponse(url="/dashboard/")

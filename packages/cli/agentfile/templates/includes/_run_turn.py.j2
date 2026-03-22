@@ -231,11 +231,22 @@ async def _run_turn(
                 except Exception as _le:
                     result_str = f"Tool error: {type(_le).__name__}: {_le}"
 {% endif %}
-{% if has_builtin_shell or has_builtin_filesystem %}
+{% if has_any_builtin %}
             elif fn_name in _BUILTIN_TOOL_NAMES:
-                # Builtin tool (shell, filesystem)
+                # Builtin tool
                 try:
+{% if has_builtin_sub_agent %}
+                    if fn_name == "sub_agent":
+                        result_str = await _builtin_sub_agent(
+                            fn_args.get("task", ""),
+                            model=fn_args.get("model", ""),
+                            max_tokens=int(fn_args.get("max_tokens", 2048)),
+                        )
+                    else:
+                        result_str = _exec_builtin_tool(fn_name, fn_args)
+{% else %}
                     result_str = _exec_builtin_tool(fn_name, fn_args)
+{% endif %}
                 except Exception as _be:
                     result_str = f"Tool error: {type(_be).__name__}: {_be}"
 {% endif %}

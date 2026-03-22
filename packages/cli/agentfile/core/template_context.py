@@ -20,7 +20,7 @@ except ImportError:
 
 if _PYDANTIC_AVAILABLE:
     class TemplateContext(BaseModel):
-        model_config = ConfigDict(arbitrary_types_allowed=True)
+        model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
         agent: Any
         has_composio_tools: bool = False
@@ -75,7 +75,17 @@ if _PYDANTIC_AVAILABLE:
         local_tool_manifests: list = []
         local_source_paths: list = []
         has_builtin_shell: bool = False
+        has_builtin_bash: bool = False
         has_builtin_filesystem: bool = False
+        has_builtin_memory: bool = False
+        has_builtin_scheduler: bool = False
+        has_builtin_web_search: bool = False
+        has_builtin_web_browse: bool = False
+        has_builtin_notify: bool = False
+        has_builtin_ask_user: bool = False
+        has_builtin_sub_agent: bool = False
+        has_builtin_code_interpreter: bool = False
+        has_any_builtin: bool = False
         apt_packages: list = []
         npm_packages: list = []
         pip_packages: list = []
@@ -85,6 +95,10 @@ if _PYDANTIC_AVAILABLE:
         has_skills: bool = False
         skill_instructions: str = ""
         skill_source_paths: list = []
+        # Modular provider system — data-driven deps
+        collected_deps: dict = {}
+        builtin_names: set = set()
+        tool_schemes: set = set()
 
 
 _SKILLS_HUB_BASE = "https://raw.githubusercontent.com/Ninetrix-ai/skills-hub/main"
@@ -343,10 +357,32 @@ def build_context(
                     _warn(f"Local tool discovery failed: {_exc}")
 
     # ── Builtin tools ────────────────────────────────────────────────────────────
+    _ALL_BUILTIN_NAMES = {
+        "bash", "filesystem", "memory", "scheduler",
+        "web_search", "web_browse", "notify", "ask_user",
+        "sub_agent", "code_interpreter",
+    }
     _builtin_tools = [t for t in agent_def.tools if t.is_builtin()]
     _builtin_names = {t.builtin_name for t in _builtin_tools}
     has_builtin_shell = "shell" in _builtin_names
+    # Backward compat: "shell" → "bash"
+    if "shell" in _builtin_names:
+        _builtin_names.discard("shell")
+        _builtin_names.add("bash")
+    # builtin: true → enable all
+    if getattr(agent_def, "builtin", False):
+        _builtin_names = set(_ALL_BUILTIN_NAMES)
+    has_builtin_bash = "bash" in _builtin_names
     has_builtin_filesystem = "filesystem" in _builtin_names
+    has_builtin_memory = "memory" in _builtin_names
+    has_builtin_scheduler = "scheduler" in _builtin_names
+    has_builtin_web_search = "web_search" in _builtin_names
+    has_builtin_web_browse = "web_browse" in _builtin_names
+    has_builtin_notify = "notify" in _builtin_names
+    has_builtin_ask_user = "ask_user" in _builtin_names
+    has_builtin_sub_agent = "sub_agent" in _builtin_names
+    has_builtin_code_interpreter = "code_interpreter" in _builtin_names
+    has_any_builtin = bool(_builtin_names)
 
     # ── Skill discovery ──────────────────────────────────────────────────────
     has_skills = False
@@ -388,6 +424,43 @@ def build_context(
     import json as _json
     has_output_type = agent_def.output_type is not None
     output_type_schema = _json.dumps(agent_def.output_type) if has_output_type else ""
+
+    # ── Collected dependencies (data-driven Dockerfile) ───────────────────────
+    _collected_pip: set[str] = set()
+    _collected_apt: set[str] = set()
+    for _t in agent_def.tools:
+        if _t.is_composio():
+            _collected_pip.add("composio")
+        if hasattr(_t, 'scheme') and _t.scheme == "openapi":
+            _collected_pip.add("httpx>=0.27")
+        if hasattr(_t, 'dependencies') and _t.dependencies:
+            _collected_pip.update(_t.dependencies.pip)
+            _collected_apt.update(_t.dependencies.apt)
+    # Feature-level deps
+    if has_any_triggers or is_multi_agent or has_invoke_server:
+        _collected_pip.update(["fastapi>=0.104", "uvicorn[standard]>=0.24"])
+    if has_schedule_triggers:
+        _collected_pip.add("apscheduler>=3.10")
+    if has_collaborators:
+        _collected_pip.add("aiohttp>=3.9")
+    if has_s3_volumes:
+        _collected_pip.add("awscli")
+    if use_mcp_gateway:
+        _collected_pip.add("httpx>=0.27")
+    # User-declared packages
+    for _p in agent_def.packages:
+        if _p.startswith("pip:"):
+            _collected_pip.add(_p[4:])
+        elif _p.startswith("npm:"):
+            pass  # npm handled separately
+        else:
+            _collected_apt.add(_p)
+
+    collected_deps = {
+        "pip": sorted(_collected_pip),
+        "apt": sorted(_collected_apt),
+    }
+    tool_schemes = {_t.scheme for _t in agent_def.tools if hasattr(_t, 'scheme')}
 
     result = {
         "agent":                      agent,
@@ -443,7 +516,17 @@ def build_context(
         "local_tool_manifests":       local_tool_manifests,
         "local_source_paths":         local_source_paths,
         "has_builtin_shell":          has_builtin_shell,
+        "has_builtin_bash":           has_builtin_bash,
         "has_builtin_filesystem":     has_builtin_filesystem,
+        "has_builtin_memory":         has_builtin_memory,
+        "has_builtin_scheduler":      has_builtin_scheduler,
+        "has_builtin_web_search":     has_builtin_web_search,
+        "has_builtin_web_browse":     has_builtin_web_browse,
+        "has_builtin_notify":         has_builtin_notify,
+        "has_builtin_ask_user":       has_builtin_ask_user,
+        "has_builtin_sub_agent":      has_builtin_sub_agent,
+        "has_builtin_code_interpreter": has_builtin_code_interpreter,
+        "has_any_builtin":            has_any_builtin,
         "apt_packages":               [p for p in agent_def.packages if ":" not in p],
         "npm_packages":               [p[4:] for p in agent_def.packages if p.startswith("npm:")],
         "pip_packages":               [p[4:] for p in agent_def.packages if p.startswith("pip:")],
@@ -453,6 +536,10 @@ def build_context(
         "has_skills":                 has_skills,
         "skill_instructions":         "\n\n---\n\n".join(skill_instructions_parts),
         "skill_source_paths":         skill_source_paths,
+        # Modular provider system — data-driven deps
+        "collected_deps":             collected_deps,
+        "builtin_names":              _builtin_names,
+        "tool_schemes":               tool_schemes,
     }
     if _PYDANTIC_AVAILABLE:
         return TemplateContext(**result)

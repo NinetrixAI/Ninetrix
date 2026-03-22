@@ -110,9 +110,15 @@
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
-        "required": ["metadata", "runtime", "tools"],
+        "required": ["metadata", "runtime"],
         "additionalProperties": false,
         "properties": {
+
+          "builtin": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, all built-in tools are automatically available (bash, filesystem, memory, scheduler, web_search, web_browse, notify, ask_user, sub_agent, code_interpreter). No need to list them individually in tools."
+          },
 
           "metadata": {
             "type": "object",
@@ -173,8 +179,7 @@
 
           "tools": {
             "type": "array",
-            "description": "Tools the agent can call. At least one is required.",
-            "minItems": 1,
+            "description": "Tools the agent can call. Required unless builtin: true is set.",
             "items": {
               "type": "object",
               "required": ["name", "source"],
@@ -183,13 +188,37 @@
                 "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
                 "source": {
                   "type": "string",
-                  "pattern": "^(mcp://|composio://|local\\.|\\./|/).+",
-                  "description": "Tool source: 'mcp://<key>' for MCP servers, 'composio://<APP>' for Composio integrations (e.g. composio://GITHUB), './path/to/tools.py' or '/abs/path/tools.py' for local @Tool Python files."
+                  "pattern": "^([a-z][a-z0-9_]*://|\\./|/).+",
+                  "description": "Tool source URI. Built-in schemes: builtin://, mcp://, composio://, openapi://. Local files: ./path/to/tools.py. Extensible via community plugins."
                 },
                 "actions": {
                   "type": "array",
                   "items": { "type": "string", "minLength": 1 },
-                  "description": "Composio-only: specific action slugs to expose (e.g. GMAIL_SEND_EMAIL). If omitted, all actions for the app are available."
+                  "description": "Filter to specific operations/actions to expose. For Composio: action slugs (e.g. GMAIL_SEND_EMAIL). For OpenAPI: operationIds."
+                },
+                "auth": {
+                  "type": "object",
+                  "description": "Authentication config for this tool source.",
+                  "properties": {
+                    "type":        { "type": "string", "enum": ["bearer", "basic", "header", "api_key_query"], "description": "Auth scheme type." },
+                    "token":       { "type": "string", "description": "Token or API key. Supports ${ENV_VAR} syntax." },
+                    "header_name": { "type": "string", "description": "Custom header name (for type=header)." },
+                    "username":    { "type": "string", "description": "Username (for type=basic). Supports ${ENV_VAR}." },
+                    "password":    { "type": "string", "description": "Password (for type=basic). Supports ${ENV_VAR}." },
+                    "query_param": { "type": "string", "description": "Query parameter name (for type=api_key_query)." }
+                  }
+                },
+                "dependencies": {
+                  "type": "object",
+                  "description": "Extra packages to install for this tool source.",
+                  "properties": {
+                    "pip": { "type": "array", "items": { "type": "string" }, "description": "pip packages to install." },
+                    "apt": { "type": "array", "items": { "type": "string" }, "description": "apt packages to install." }
+                  }
+                },
+                "base_url": {
+                  "type": "string",
+                  "description": "Override the base URL for OpenAPI sources."
                 }
               }
             }

@@ -215,6 +215,10 @@ def build_cmd(agentfile_path: str, tag: str, push: bool, agent_filter: str | Non
             push_image(ref)
 
     if len(built_refs) == 1:
-        console.print(f"\n  Run it with:\n    [bold]ninetrix run --image {built_refs[0]}[/bold]\n")
+        console.print(
+            f"\n  Run it with:\n"
+            f"    [bold]ninetrix run --file {agentfile_path}[/bold]\n"
+            f"    [dim]or from any directory:[/dim] [bold]ninetrix run --image {built_refs[0]}[/bold]\n"
+        )
     else:
         console.print(f"\n  Start the warm pool with:\n    [bold]ninetrix up --file {agentfile_path}[/bold]\n")

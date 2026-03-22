@@ -1,14 +1,15 @@
-{% if has_builtin_shell or has_builtin_filesystem %}
+{% if has_any_builtin %}
 # ── Builtin tools ─────────────────────────────────────────────────────────────
 import subprocess as _subprocess
 
-{% if has_builtin_shell %}
-def _builtin_shell_exec(command: str, timeout: int = 60, working_dir: str = "/app") -> str:
-    """Execute a shell command and return combined stdout + stderr."""
+{% if has_builtin_bash %}
+def _builtin_bash_exec(command: str, timeout: int = 60, working_dir: str = "/app") -> str:
+    """Execute a bash command and return combined stdout + stderr."""
     try:
         result = _subprocess.run(
             command,
             shell=True,
+            executable="/bin/bash",
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -27,16 +28,16 @@ def _builtin_shell_exec(command: str, timeout: int = 60, working_dir: str = "/ap
         return f"[error] {type(exc).__name__}: {exc}"
 
 
-_BUILTIN_SHELL_TOOL_DEF = {
+_BUILTIN_BASH_TOOL_DEF = {
     "type": "function",
     "function": {
-        "name": "shell",
+        "name": "bash",
         "description": (
-            "Execute a shell command inside the agent container. "
+            "Execute a bash command inside the agent container. "
             "You have full root access. Use this to run any CLI tool, "
             "install packages (apt-get, pip), inspect the system, "
             "process files, make HTTP requests (curl), or run scripts. "
-            "Commands run in /bin/sh. The working directory defaults to /app."
+            "Commands run in /bin/bash. The working directory defaults to /app."
         ),
         "parameters": {
             "type": "object",
@@ -44,7 +45,7 @@ _BUILTIN_SHELL_TOOL_DEF = {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute (e.g. 'ls -la', 'apt-get install -y jq', 'curl https://api.example.com')"
+                    "description": "The bash command to execute (e.g. 'ls -la', 'apt-get install -y jq', 'curl https://api.example.com')"
                 },
                 "timeout": {
                     "type": "integer",
@@ -156,25 +157,816 @@ _BUILTIN_LIST_DIR_DEF = {
 }
 {% endif %}
 
+{% if has_builtin_memory %}
+# ── Memory (daily markdown files) ────────────────────────────────────────────
+import os as _os
+from datetime import datetime as _mem_dt, timezone as _mem_tz
+
+_MEMORY_DIR = _os.environ.get("AGENTFILE_MEMORY_DIR", "/app/memory")
+_os.makedirs(_MEMORY_DIR, exist_ok=True)
+
+
+def _memory_today_path() -> str:
+    return _os.path.join(_MEMORY_DIR, _mem_dt.now(_mem_tz.utc).strftime("%Y-%m-%d") + ".md")
+
+
+def _builtin_memory_save(content: str, category: str = "facts") -> str:
+    """Append a memory entry to today's file under the given category."""
+    try:
+        path = _memory_today_path()
+        today = _mem_dt.now(_mem_tz.utc).strftime("%Y-%m-%d")
+        existing = ""
+        if _os.path.exists(path):
+            with open(path, "r") as f:
+                existing = f.read()
+        if not existing.strip():
+            existing = f"# {today}\n"
+        header = f"\n## {category.title()}\n"
+        if header.strip() not in existing:
+            existing += header
+        timestamp = _mem_dt.now(_mem_tz.utc).strftime("%H:%M")
+        existing += f"- [{timestamp}] {content}\n"
+        with open(path, "w") as f:
+            f.write(existing)
+        return f"Saved to memory ({category}): {content[:100]}"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+def _builtin_memory_search(query: str) -> str:
+    """Full-text search across all memory files. Returns matching sections."""
+    try:
+        results = []
+        query_lower = query.lower()
+        if not _os.path.exists(_MEMORY_DIR):
+            return "No memories found."
+        files = sorted(
+            [f for f in _os.listdir(_MEMORY_DIR) if f.endswith(".md")],
+            reverse=True
+        )
+        for fname in files[:90]:
+            fpath = _os.path.join(_MEMORY_DIR, fname)
+            with open(fpath, "r") as f:
+                content = f.read()
+            for line in content.split("\n"):
+                if query_lower in line.lower():
+                    results.append(f"[{fname}] {line.strip()}")
+        if not results:
+            return f"No memories matching '{query}'."
+        return "\n".join(results[:50])
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+def _builtin_memory_recall(date: str = "") -> str:
+    """Read a specific day's memory file, or today's if no date given."""
+    try:
+        if not date:
+            date = _mem_dt.now(_mem_tz.utc).strftime("%Y-%m-%d")
+        path = _os.path.join(_MEMORY_DIR, f"{date}.md")
+        if not _os.path.exists(path):
+            return f"No memories for {date}."
+        with open(path, "r") as f:
+            return f.read()
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+def _builtin_memory_summary() -> str:
+    """Read the rolling summary file, or generate one from recent days."""
+    try:
+        summary_path = _os.path.join(_MEMORY_DIR, "summary.md")
+        if _os.path.exists(summary_path):
+            with open(summary_path, "r") as f:
+                return f.read()
+        # No summary yet — return last 3 days
+        files = sorted(
+            [f for f in _os.listdir(_MEMORY_DIR) if f.endswith(".md") and f != "summary.md"],
+            reverse=True
+        )
+        if not files:
+            return "No memories yet."
+        parts = []
+        for fname in files[:3]:
+            fpath = _os.path.join(_MEMORY_DIR, fname)
+            with open(fpath, "r") as f:
+                parts.append(f.read())
+        return "\n---\n".join(parts)
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_MEMORY_SAVE_DEF = {
+    "type": "function",
+    "function": {
+        "name": "memory_save",
+        "description": (
+            "Save a fact, decision, preference, or task to long-term memory. "
+            "Memories persist across sessions. Use categories to organize: "
+            "facts, decisions, tasks, preferences, user_profile."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["content"],
+            "properties": {
+                "content": {"type": "string", "description": "The information to remember"},
+                "category": {
+                    "type": "string",
+                    "description": "Category: facts, decisions, tasks, preferences, user_profile (default: facts)",
+                    "default": "facts"
+                }
+            }
+        }
+    }
+}
+
+_BUILTIN_MEMORY_SEARCH_DEF = {
+    "type": "function",
+    "function": {
+        "name": "memory_search",
+        "description": "Search across all past memories. Returns matching lines from all days.",
+        "parameters": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "description": "Text to search for in memory"}
+            }
+        }
+    }
+}
+
+_BUILTIN_MEMORY_RECALL_DEF = {
+    "type": "function",
+    "function": {
+        "name": "memory_recall",
+        "description": "Read all memories from a specific date (or today if omitted).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "Date in YYYY-MM-DD format (default: today)", "default": ""}
+            }
+        }
+    }
+}
+
+_BUILTIN_MEMORY_SUMMARY_DEF = {
+    "type": "function",
+    "function": {
+        "name": "memory_summary",
+        "description": "Get a rolling summary of all past memories. Use at the start of a session to catch up on context.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_scheduler %}
+# ── Scheduler (persistent reminders & recurring tasks) ───────────────────────
+import os as _os
+import threading as _threading
+from datetime import datetime as _sched_dt, timezone as _sched_tz, timedelta as _sched_td
+
+_SCHEDULES_FILE = _os.path.join(
+    _os.environ.get("AGENTFILE_MEMORY_DIR", "/app/memory"),
+    "schedules.json"
+)
+_sched_lock = _threading.Lock()
+
+# Queue for fired reminders — the main conversation loop drains this
+_reminder_queue: list[str] = []
+_reminder_queue_lock = _threading.Lock()
+
+
+def _get_local_tz() -> _sched_tz:
+    """Get the machine's local timezone offset."""
+    try:
+        local_offset = _sched_dt.now(_sched_tz.utc).astimezone().utcoffset()
+        if local_offset is not None:
+            return _sched_tz(local_offset)
+    except Exception:
+        pass
+    return _sched_tz.utc
+
+
+def _now_local() -> _sched_dt:
+    """Get current time in the machine's local timezone."""
+    return _sched_dt.now(_get_local_tz())
+
+
+def _load_schedules() -> list:
+    try:
+        with _sched_lock:
+            if _os.path.exists(_SCHEDULES_FILE):
+                with open(_SCHEDULES_FILE, "r") as f:
+                    return json.loads(f.read())
+    except Exception:
+        pass
+    return []
+
+
+def _save_schedules(schedules: list) -> None:
+    with _sched_lock:
+        _os.makedirs(_os.path.dirname(_SCHEDULES_FILE) or ".", exist_ok=True)
+        with open(_SCHEDULES_FILE, "w") as f:
+            f.write(json.dumps(schedules, indent=2))
+
+
+def _parse_schedule_time(time_str: str) -> _sched_dt | None:
+    """Parse various time formats into a timezone-aware datetime."""
+    # Try ISO format first (with timezone info)
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            dt = _sched_dt.strptime(time_str, fmt)
+            if fmt.endswith("Z"):
+                dt = dt.replace(tzinfo=_sched_tz.utc)
+            return dt
+        except ValueError:
+            continue
+    # Naive formats → assume LOCAL timezone
+    local_tz = _get_local_tz()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                "%H:%M:%S", "%H:%M"):
+        try:
+            dt = _sched_dt.strptime(time_str, fmt)
+            if fmt in ("%H:%M:%S", "%H:%M"):
+                # Time-only → today's date in local tz
+                today = _now_local()
+                dt = dt.replace(year=today.year, month=today.month, day=today.day)
+            dt = dt.replace(tzinfo=local_tz)
+            return dt
+        except ValueError:
+            continue
+    # Relative: "in Xm", "in Xh", "in X minutes"
+    import re as _re_sched
+    m = _re_sched.match(r"in\s+(\d+)\s*(m|min|mins|minutes?|h|hrs?|hours?|s|sec|secs?|seconds?)", time_str.lower().strip())
+    if m:
+        val = int(m.group(1))
+        unit = m.group(2)[0]  # m, h, or s
+        delta = {"s": _sched_td(seconds=val), "m": _sched_td(minutes=val), "h": _sched_td(hours=val)}[unit]
+        return _now_local() + delta
+    return None
+
+
+def _cron_matches_now(cron_expr: str, now: _sched_dt) -> bool:
+    """Simple cron matching: 'minute hour day month weekday'."""
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        return False
+    fields = [now.minute, now.hour, now.day, now.month, now.weekday()]
+    # weekday: cron uses 0=Sun, python uses 0=Mon → convert
+    fields[4] = (fields[4] + 1) % 7
+    for cron_val, actual_val in zip(parts, fields):
+        if cron_val == "*":
+            continue
+        try:
+            if int(cron_val) != actual_val:
+                return False
+        except ValueError:
+            return False
+    return True
+
+
+# ── Background scheduler thread ──────────────────────────────────────────────
+_scheduler_started = False
+
+
+def _scheduler_loop():
+    """Background thread: checks schedules every 5 seconds, fires due reminders."""
+    while True:
+        try:
+            time.sleep(5)
+            schedules = _load_schedules()
+            now = _now_local()
+            changed = False
+
+            for entry in schedules:
+                if entry.get("status") != "active":
+                    continue
+
+                should_fire = False
+
+                if entry.get("recurring") and entry.get("cron"):
+                    should_fire = _cron_matches_now(entry["cron"], now)
+                    # Prevent double-fire within same minute
+                    last_fired = entry.get("last_fired", "")
+                    this_minute = now.strftime("%Y-%m-%dT%H:%M")
+                    if should_fire and last_fired == this_minute:
+                        should_fire = False
+                    if should_fire:
+                        entry["last_fired"] = this_minute
+                        changed = True
+                else:
+                    # One-time reminder — compare in UTC to avoid tz confusion
+                    fire_at = _parse_schedule_time(entry.get("time", ""))
+                    if fire_at:
+                        # Normalize both to UTC for comparison
+                        now_utc = _sched_dt.now(_sched_tz.utc)
+                        fire_utc = fire_at.astimezone(_sched_tz.utc)
+                        if now_utc >= fire_utc:
+                            should_fire = True
+                            entry["status"] = "fired"
+                            changed = True
+
+                if should_fire:
+                    msg = entry.get("description", "Reminder")
+                    # Push to reminder queue — the main loop will inject it
+                    with _reminder_queue_lock:
+                        _reminder_queue.append(msg)
+                    # Also print immediately in case the agent is idle
+                    print(
+                        f"\n{'='*60}\n"
+                        f"\U0001f514 REMINDER: {msg}\n"
+                        f"{'='*60}\n",
+                        flush=True,
+                    )
+
+            if changed:
+                _save_schedules(schedules)
+        except Exception as _sched_exc:
+            print(f"[scheduler] Error: {_sched_exc}", file=sys.stderr, flush=True)
+
+
+def _drain_reminders() -> list[str]:
+    """Drain all pending reminders from the queue. Called from the main loop."""
+    with _reminder_queue_lock:
+        items = list(_reminder_queue)
+        _reminder_queue.clear()
+    return items
+
+
+def _start_scheduler():
+    """Start the background scheduler thread (once)."""
+    global _scheduler_started
+    if _scheduler_started:
+        return
+    _scheduler_started = True
+    t = _threading.Thread(target=_scheduler_loop, daemon=True, name="builtin-scheduler")
+    t.start()
+    _tz_name = _now_local().strftime("%Z") or str(_get_local_tz())
+    print(f"[scheduler] Background scheduler started (checks every 5s, timezone: {_tz_name})", file=sys.stderr, flush=True)
+
+
+# Auto-start the scheduler when the module loads
+_start_scheduler()
+
+
+def _builtin_schedule_create(
+    description: str,
+    time_str: str,
+    recurring: bool = False,
+    cron: str = "",
+    channel: str = "stdout",
+) -> str:
+    """Create a scheduled reminder or recurring task."""
+    try:
+        # Validate time for one-time reminders
+        if not recurring:
+            parsed = _parse_schedule_time(time_str)
+            if parsed is None:
+                return (
+                    f"[error] Could not parse time: '{time_str}'. "
+                    "Use ISO format (2026-03-22T13:20:00Z) or relative (in 5m, in 2h)."
+                )
+            # Store the absolute ISO time so the scheduler can compare
+            time_str = parsed.isoformat()
+
+        schedules = _load_schedules()
+        entry = {
+            "id": f"sched_{uuid.uuid4().hex[:8]}",
+            "description": description,
+            "time": time_str,
+            "recurring": recurring,
+            "cron": cron,
+            "channel": channel,
+            "status": "active",
+            "created_at": _sched_dt.now(_sched_tz.utc).isoformat(),
+        }
+        schedules.append(entry)
+        _save_schedules(schedules)
+        kind = "recurring task" if recurring else "reminder"
+        if not recurring:
+            return f"Created {kind}: '{description}' — will fire at {time_str} (id: {entry['id']})"
+        else:
+            return f"Created {kind}: '{description}' — cron: {cron} (id: {entry['id']})"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+def _builtin_schedule_list() -> str:
+    """List all scheduled reminders and tasks."""
+    try:
+        schedules = _load_schedules()
+        if not schedules:
+            return "No scheduled reminders or tasks."
+        lines = []
+        for s in schedules:
+            status = s.get("status", "active")
+            kind = "recurring" if s.get("recurring") else "one-time"
+            lines.append(f"- [{status}] {s['id']}: {s['description']} ({kind}, {s['time']})")
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+def _builtin_schedule_cancel(schedule_id: str) -> str:
+    """Cancel a scheduled reminder or task by ID."""
+    try:
+        schedules = _load_schedules()
+        for s in schedules:
+            if s["id"] == schedule_id:
+                s["status"] = "cancelled"
+                _save_schedules(schedules)
+                return f"Cancelled schedule: {schedule_id}"
+        return f"Schedule not found: {schedule_id}"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_SCHEDULE_CREATE_DEF = {
+    "type": "function",
+    "function": {
+        "name": "schedule_create",
+        "description": (
+            "Create a reminder or recurring task. The reminder WILL fire automatically — "
+            "a background thread checks every 5 seconds and injects reminders into the conversation. "
+            "Times are in the user's LOCAL timezone. "
+            "For one-time: use relative time (e.g. 'in 1m', 'in 5m', 'in 2h') or ISO datetime. "
+            "For recurring: set recurring=true and provide a cron expression (e.g. '0 9 * * *')."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["description", "time"],
+            "properties": {
+                "description": {"type": "string", "description": "What to remind or do"},
+                "time": {"type": "string", "description": "When to fire: ISO datetime (2026-03-22T13:20:00Z), or relative (in 5m, in 1h, in 30s)"},
+                "recurring": {"type": "boolean", "description": "Whether this repeats (default: false)", "default": False},
+                "cron": {"type": "string", "description": "Cron expression for recurring tasks (e.g. '0 9 * * *' for daily at 9am)", "default": ""},
+                "channel": {"type": "string", "description": "Delivery channel: stdout, webhook (default: stdout)", "default": "stdout"}
+            }
+        }
+    }
+}
+
+_BUILTIN_SCHEDULE_LIST_DEF = {
+    "type": "function",
+    "function": {
+        "name": "schedule_list",
+        "description": "List all scheduled reminders and recurring tasks with their status.",
+        "parameters": {"type": "object", "properties": {}}
+    }
+}
+
+_BUILTIN_SCHEDULE_CANCEL_DEF = {
+    "type": "function",
+    "function": {
+        "name": "schedule_cancel",
+        "description": "Cancel a scheduled reminder or recurring task by its ID.",
+        "parameters": {
+            "type": "object",
+            "required": ["schedule_id"],
+            "properties": {
+                "schedule_id": {"type": "string", "description": "The schedule ID to cancel"}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_web_search %}
+# ── Web Search (DuckDuckGo HTML scrape, no API key) ─────────────────────────
+import urllib.request as _urllib_req
+import urllib.parse as _urllib_parse
+import html as _html_mod
+
+
+def _builtin_web_search(query: str, max_results: int = 5) -> str:
+    """Search the web via DuckDuckGo and return results."""
+    try:
+        encoded = _urllib_parse.quote_plus(query)
+        url = f"https://html.duckduckgo.com/html/?q={encoded}"
+        req = _urllib_req.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; NinetrixAgent/1.0)"})
+        with _urllib_req.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        # Parse result snippets from HTML
+        results = []
+        parts = raw.split('class="result__a"')
+        for part in parts[1:max_results + 1]:
+            # Extract title
+            title_end = part.find("</a>")
+            title_start = part.find(">") + 1
+            title = _html_mod.unescape(part[title_start:title_end]).strip() if title_end > title_start else ""
+            # Extract URL
+            href_start = part.find('href="')
+            href = ""
+            if href_start != -1:
+                href_end = part.find('"', href_start + 6)
+                href = part[href_start + 6:href_end]
+                if href.startswith("//duckduckgo.com/l/?uddg="):
+                    href = _urllib_parse.unquote(href.split("uddg=")[1].split("&")[0])
+            # Extract snippet
+            snippet = ""
+            snip_marker = 'class="result__snippet"'
+            snip_idx = part.find(snip_marker)
+            if snip_idx != -1:
+                snip_start = part.find(">", snip_idx) + 1
+                snip_end = part.find("</", snip_start)
+                snippet = _html_mod.unescape(part[snip_start:snip_end]).strip()
+            if title:
+                results.append(f"**{title}**\n{href}\n{snippet}")
+        if not results:
+            return f"No results found for: {query}"
+        return "\n\n".join(results)
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_WEB_SEARCH_DEF = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the web using DuckDuckGo. Returns titles, URLs, and snippets. No API key required.",
+        "parameters": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "max_results": {"type": "integer", "description": "Max results to return (default: 5)", "default": 5}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_web_browse %}
+# ── Web Browse (fetch URL, extract text) ─────────────────────────────────────
+import urllib.request as _urllib_req
+
+
+def _builtin_web_browse(url: str, max_chars: int = 10000) -> str:
+    """Fetch a URL and return extracted text content."""
+    try:
+        req = _urllib_req.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; NinetrixAgent/1.0)"})
+        with _urllib_req.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        # Strip HTML tags for a basic text extraction
+        import re as _re_browse
+        text = _re_browse.sub(r"<script[^>]*>.*?</script>", "", raw, flags=_re_browse.DOTALL | _re_browse.IGNORECASE)
+        text = _re_browse.sub(r"<style[^>]*>.*?</style>", "", text, flags=_re_browse.DOTALL | _re_browse.IGNORECASE)
+        text = _re_browse.sub(r"<[^>]+>", " ", text)
+        text = _re_browse.sub(r"\s+", " ", text).strip()
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n... (truncated, {len(text)} total chars)"
+        return text if text else "(empty page)"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_WEB_BROWSE_DEF = {
+    "type": "function",
+    "function": {
+        "name": "web_browse",
+        "description": "Fetch a URL and extract its text content. Strips HTML tags. Good for reading articles, docs, and web pages.",
+        "parameters": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch"},
+                "max_chars": {"type": "integer", "description": "Max characters to return (default: 10000)", "default": 10000}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_notify %}
+# ── Notify (send message to user) ───────────────────────────────────────────
+import urllib.request as _urllib_req
+
+
+def _builtin_notify(message: str, channel: str = "stdout", webhook_url: str = "") -> str:
+    """Send a notification to the user."""
+    try:
+        if channel == "stdout":
+            print(f"\n🔔 NOTIFICATION: {message}\n", flush=True)
+            return f"Notification sent to stdout: {message[:100]}"
+        elif channel == "webhook" and webhook_url:
+            data = json.dumps({"text": message, "agent_id": AGENT_ID}).encode()
+            req = _urllib_req.Request(
+                webhook_url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with _urllib_req.urlopen(req, timeout=10) as resp:
+                return f"Notification sent to webhook ({resp.status}): {message[:100]}"
+        else:
+            print(f"\n🔔 NOTIFICATION: {message}\n", flush=True)
+            return f"Notification sent: {message[:100]}"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_NOTIFY_DEF = {
+    "type": "function",
+    "function": {
+        "name": "notify",
+        "description": "Send a notification to the user. Use this to proactively alert the user about something important, deliver a reminder, or report status.",
+        "parameters": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+                "message": {"type": "string", "description": "The notification message"},
+                "channel": {"type": "string", "description": "Delivery channel: stdout (default) or webhook", "default": "stdout"},
+                "webhook_url": {"type": "string", "description": "Webhook URL (required if channel is 'webhook')", "default": ""}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_ask_user %}
+# ── Ask User (pause and wait for input) ──────────────────────────────────────
+
+def _builtin_ask_user(question: str) -> str:
+    """Pause and ask the user a question. Blocks until they respond."""
+    try:
+        print(f"\n❓ {question}", flush=True)
+        answer = input("> ").strip()
+        return answer if answer else "(no answer)"
+    except (KeyboardInterrupt, EOFError):
+        return "(user cancelled)"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_ASK_USER_DEF = {
+    "type": "function",
+    "function": {
+        "name": "ask_user",
+        "description": "Pause and ask the user a question. Use when you need clarification, confirmation, or additional input before proceeding.",
+        "parameters": {
+            "type": "object",
+            "required": ["question"],
+            "properties": {
+                "question": {"type": "string", "description": "The question to ask the user"}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_sub_agent %}
+# ── Sub Agent (lightweight LLM worker) ───────────────────────────────────────
+
+async def _builtin_sub_agent(task: str, model: str = "", max_tokens: int = 2048) -> str:
+    """Spawn a lightweight sub-agent LLM call for a specific task."""
+    try:
+        sub_model = model or MODEL
+        sub_litellm = f"{_PROVIDER_PREFIX.get(PROVIDER, PROVIDER)}/{sub_model}"
+        messages = [
+            {"role": "system", "content": "You are a helpful sub-agent. Complete the task concisely."},
+            {"role": "user", "content": task},
+        ]
+        response = await asyncio.to_thread(
+            litellm.completion,
+            model=sub_litellm,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=TEMP,
+        )
+        result_text = response.choices[0].message.content or ""
+        _in_tok = getattr(response.usage, "prompt_tokens", 0)
+        _out_tok = getattr(response.usage, "completion_tokens", 0)
+        _charge(sub_litellm, _in_tok, _out_tok, label="sub_agent")
+        return result_text
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_SUB_AGENT_DEF = {
+    "type": "function",
+    "function": {
+        "name": "sub_agent",
+        "description": (
+            "Spawn a lightweight LLM sub-agent to handle a specific subtask. "
+            "The sub-agent runs a single LLM call with no tools — good for "
+            "summarization, analysis, drafting, or transformation tasks. "
+            "Costs are tracked against the main agent's budget."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["task"],
+            "properties": {
+                "task": {"type": "string", "description": "The task for the sub-agent to complete"},
+                "model": {"type": "string", "description": "Model override (default: same as main agent)", "default": ""},
+                "max_tokens": {"type": "integer", "description": "Max output tokens (default: 2048)", "default": 2048}
+            }
+        }
+    }
+}
+{% endif %}
+
+{% if has_builtin_code_interpreter %}
+# ── Code Interpreter (sandboxed Python execution) ───────────────────────────
+
+def _builtin_code_interpreter(code: str, timeout: int = 30) -> str:
+    """Run Python code in a subprocess and return stdout + stderr."""
+    try:
+        result = _subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd="/app",
+        )
+        output_parts = []
+        if result.stdout:
+            output_parts.append(result.stdout)
+        if result.stderr:
+            output_parts.append(f"[stderr] {result.stderr}")
+        output_parts.append(f"[exit_code: {result.returncode}]")
+        return "\n".join(output_parts).strip()
+    except _subprocess.TimeoutExpired:
+        return f"[error] Code execution timed out after {timeout}s"
+    except Exception as exc:
+        return f"[error] {type(exc).__name__}: {exc}"
+
+
+_BUILTIN_CODE_INTERPRETER_DEF = {
+    "type": "function",
+    "function": {
+        "name": "code_interpreter",
+        "description": (
+            "Run Python code and return the output. Use for calculations, "
+            "data processing, generating charts, or any computation. "
+            "The code runs in a fresh Python subprocess with access to "
+            "all installed packages."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["code"],
+            "properties": {
+                "code": {"type": "string", "description": "Python code to execute"},
+                "timeout": {"type": "integer", "description": "Max seconds for execution (default: 30)", "default": 30}
+            }
+        }
+    }
+}
+{% endif %}
+
 # Collect all builtin tool definitions
 _BUILTIN_TOOL_DEFS: list[dict] = []
 _BUILTIN_TOOL_NAMES: set[str] = set()
 
-{% if has_builtin_shell %}
-_BUILTIN_TOOL_DEFS.append(_BUILTIN_SHELL_TOOL_DEF)
-_BUILTIN_TOOL_NAMES.add("shell")
+{% if has_builtin_bash %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_BASH_TOOL_DEF)
+_BUILTIN_TOOL_NAMES.add("bash")
 {% endif %}
 {% if has_builtin_filesystem %}
 _BUILTIN_TOOL_DEFS.extend([_BUILTIN_READ_FILE_DEF, _BUILTIN_WRITE_FILE_DEF, _BUILTIN_LIST_DIR_DEF])
 _BUILTIN_TOOL_NAMES.update({"read_file", "write_file", "list_dir"})
 {% endif %}
+{% if has_builtin_memory %}
+_BUILTIN_TOOL_DEFS.extend([_BUILTIN_MEMORY_SAVE_DEF, _BUILTIN_MEMORY_SEARCH_DEF, _BUILTIN_MEMORY_RECALL_DEF, _BUILTIN_MEMORY_SUMMARY_DEF])
+_BUILTIN_TOOL_NAMES.update({"memory_save", "memory_search", "memory_recall", "memory_summary"})
+{% endif %}
+{% if has_builtin_scheduler %}
+_BUILTIN_TOOL_DEFS.extend([_BUILTIN_SCHEDULE_CREATE_DEF, _BUILTIN_SCHEDULE_LIST_DEF, _BUILTIN_SCHEDULE_CANCEL_DEF])
+_BUILTIN_TOOL_NAMES.update({"schedule_create", "schedule_list", "schedule_cancel"})
+{% endif %}
+{% if has_builtin_web_search %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_WEB_SEARCH_DEF)
+_BUILTIN_TOOL_NAMES.add("web_search")
+{% endif %}
+{% if has_builtin_web_browse %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_WEB_BROWSE_DEF)
+_BUILTIN_TOOL_NAMES.add("web_browse")
+{% endif %}
+{% if has_builtin_notify %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_NOTIFY_DEF)
+_BUILTIN_TOOL_NAMES.add("notify")
+{% endif %}
+{% if has_builtin_ask_user %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_ASK_USER_DEF)
+_BUILTIN_TOOL_NAMES.add("ask_user")
+{% endif %}
+{% if has_builtin_sub_agent %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_SUB_AGENT_DEF)
+_BUILTIN_TOOL_NAMES.add("sub_agent")
+{% endif %}
+{% if has_builtin_code_interpreter %}
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_CODE_INTERPRETER_DEF)
+_BUILTIN_TOOL_NAMES.add("code_interpreter")
+{% endif %}
 
 
 def _exec_builtin_tool(fn_name: str, fn_args: dict) -> str:
     """Dispatch a builtin tool call. Returns result string."""
-{% if has_builtin_shell %}
-    if fn_name == "shell":
-        return _builtin_shell_exec(
+{% if has_builtin_bash %}
+    if fn_name == "bash":
+        return _builtin_bash_exec(
             fn_args.get("command", ""),
             timeout=int(fn_args.get("timeout", 60)),
             working_dir=str(fn_args.get("working_dir", "/app")),
@@ -194,6 +986,55 @@ def _exec_builtin_tool(fn_name: str, fn_args: dict) -> str:
             fn_args.get("path", "."),
             recursive=bool(fn_args.get("recursive", False)),
         )
+{% endif %}
+{% if has_builtin_memory %}
+    if fn_name == "memory_save":
+        return _builtin_memory_save(fn_args.get("content", ""), category=fn_args.get("category", "facts"))
+    if fn_name == "memory_search":
+        return _builtin_memory_search(fn_args.get("query", ""))
+    if fn_name == "memory_recall":
+        return _builtin_memory_recall(date=fn_args.get("date", ""))
+    if fn_name == "memory_summary":
+        return _builtin_memory_summary()
+{% endif %}
+{% if has_builtin_scheduler %}
+    if fn_name == "schedule_create":
+        return _builtin_schedule_create(
+            fn_args.get("description", ""),
+            time_str=fn_args.get("time", ""),
+            recurring=bool(fn_args.get("recurring", False)),
+            cron=fn_args.get("cron", ""),
+            channel=fn_args.get("channel", "stdout"),
+        )
+    if fn_name == "schedule_list":
+        return _builtin_schedule_list()
+    if fn_name == "schedule_cancel":
+        return _builtin_schedule_cancel(fn_args.get("schedule_id", ""))
+{% endif %}
+{% if has_builtin_web_search %}
+    if fn_name == "web_search":
+        return _builtin_web_search(fn_args.get("query", ""), max_results=int(fn_args.get("max_results", 5)))
+{% endif %}
+{% if has_builtin_web_browse %}
+    if fn_name == "web_browse":
+        return _builtin_web_browse(fn_args.get("url", ""), max_chars=int(fn_args.get("max_chars", 10000)))
+{% endif %}
+{% if has_builtin_notify %}
+    if fn_name == "notify":
+        return _builtin_notify(fn_args.get("message", ""), channel=fn_args.get("channel", "stdout"), webhook_url=fn_args.get("webhook_url", ""))
+{% endif %}
+{% if has_builtin_ask_user %}
+    if fn_name == "ask_user":
+        return _builtin_ask_user(fn_args.get("question", ""))
+{% endif %}
+{% if has_builtin_sub_agent %}
+    if fn_name == "sub_agent":
+        # sub_agent is async — dispatched directly from _run_turn via await
+        return "[error] sub_agent must be called via async dispatch"
+{% endif %}
+{% if has_builtin_code_interpreter %}
+    if fn_name == "code_interpreter":
+        return _builtin_code_interpreter(fn_args.get("code", ""), timeout=int(fn_args.get("timeout", 30)))
 {% endif %}
     return f"Error: unknown builtin tool '{fn_name}'"
 

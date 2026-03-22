@@ -35,6 +35,7 @@ from agentfile.commands.connect import connect_cmd, disconnect_cmd, connections_
 from agentfile.commands.migrate import migrate_cmd
 from agentfile.commands.schema import schema_cmd
 from agentfile.commands.channel import channel_cmd
+from agentfile.commands.tools import tools_cmd
 
 console = Console()
 
@@ -155,6 +156,7 @@ cli.add_command(disconnect_cmd,  name="disconnect")
 cli.add_command(migrate_cmd,     name="migrate")
 cli.add_command(schema_cmd,      name="schema")
 cli.add_command(channel_cmd,     name="channel")
+cli.add_command(tools_cmd,       name="tools")
 
 
 def main() -> None:

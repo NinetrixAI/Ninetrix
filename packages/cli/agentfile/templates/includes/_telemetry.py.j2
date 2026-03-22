@@ -25,6 +25,22 @@ def _post_runner_event(event_type: str, data: dict) -> None:
 # in agentfile.yaml for this to work.
 
 _SAAS_PERSIST: bool = bool(_RUNNER_TOKEN and _API_URL)
+
+# ── Heartbeat ─────────────────────────────────────────────────────────────────
+# A daemon thread sends a lightweight ping every 15s so the API (and dashboard)
+# can distinguish "container is alive" from "container crashed silently".
+# The thread dies automatically when the main process exits (daemon=True).
+
+import threading as _threading
+
+def _heartbeat_loop() -> None:
+    import time
+    while True:
+        time.sleep(15)
+        _post_runner_event("heartbeat", {"agent_id": AGENT_ID})
+
+if _SAAS_PERSIST:
+    _threading.Thread(target=_heartbeat_loop, daemon=True, name="heartbeat").start()
 print(
     f"[telemetry] {'enabled → ' + _API_URL if _SAAS_PERSIST else 'disabled'}"
     + (f"  (token={'set' if _RUNNER_TOKEN else 'missing'}, url={'set' if _API_URL else 'missing'})" if not _SAAS_PERSIST else ""),

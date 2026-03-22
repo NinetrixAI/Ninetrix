@@ -55,24 +55,66 @@ def _parse_memory(s: str) -> int:
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
+class ToolAuth(BaseModel):
+    """Authentication config for a tool source."""
+    model_config = ConfigDict(frozen=True)
+
+    type: str = "bearer"
+    token: str = ""
+    header_name: str = ""
+    username: str = ""
+    password: str = ""
+    query_param: str = ""
+
+
+class ToolDependencies(BaseModel):
+    """Extra packages to install for a tool source."""
+    model_config = ConfigDict(frozen=True)
+
+    pip: list[str] = Field(default_factory=list)
+    apt: list[str] = Field(default_factory=list)
+
+
 class Tool(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str
     source: str
     actions: list[str] = Field(default_factory=list)
+    auth: Optional[ToolAuth] = None
+    dependencies: Optional[ToolDependencies] = None
+    base_url: str = ""
+
+    @property
+    def scheme(self) -> str:
+        """Extract URI scheme: 'mcp', 'composio', 'openapi', 'builtin', etc."""
+        if "://" in self.source:
+            return self.source.split("://", 1)[0]
+        if self.source.startswith("./") or self.source.startswith("/"):
+            return "local"
+        return "unknown"
+
+    @property
+    def source_path(self) -> str:
+        """Extract the part after '://' or the full path for local sources."""
+        if "://" in self.source:
+            return self.source.split("://", 1)[1]
+        return self.source
 
     def is_mcp(self) -> bool:
-        return self.source.startswith("mcp://")
+        return self.scheme == "mcp"
 
     def is_composio(self) -> bool:
-        return self.source.startswith("composio://")
+        return self.scheme == "composio"
 
     def is_local(self) -> bool:
-        return self.source.startswith("./") or self.source.startswith("/")
+        return self.scheme == "local"
 
     def is_builtin(self) -> bool:
-        return self.source.startswith("builtin://")
+        return self.scheme == "builtin"
+
+    def is_openapi(self) -> bool:
+        return self.scheme == "openapi"
 
     @property
     def builtin_name(self) -> Optional[str]:
@@ -448,6 +490,16 @@ class AgentFile(BaseModel):
                 file=sys.stderr,
             )
 
+        return cls._parse(data)
+
+    @classmethod
+    def from_string(cls, yaml_text: str) -> "AgentFile":
+        """Parse and validate an agentfile.yaml from a YAML string."""
+        data = yaml.safe_load(yaml_text)
+        if not isinstance(data, dict):
+            raise ValueError("Agentfile YAML must be a mapping at the root level.")
+        if "agents" not in data:
+            raise ValueError("Missing required 'agents:' key.")
         return cls._parse(data)
 
     @classmethod

@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
+# Example: Agent with all 14 builtin tools — full Claude Code-level capabilities
+schema_version: "1.1"
+
+governance:
+  max_budget_per_run: 2.00
+  human_approval:
+    enabled: false
+  rate_limit: 20_requests_per_minute
+
+agents:
+  full-stack-agent:
+    metadata:
+      description: A fully-equipped agent with all builtin tools for any software engineering task
+      role: Senior Software Engineer
+      goal: Handle any software engineering task end-to-end — coding, debugging, research, deployment
+      instructions: |
+        You are a senior software engineer with full access to the local filesystem,
+        shell, web, and Python runtime. You can handle any task autonomously.
+
+        Workflow:
+        1. Break complex tasks into subtasks (use task_create)
+        2. Research if needed (web_search → web_fetch for details)
+        3. Explore the codebase (glob, search_in_files, read_file)
+        4. Make changes (edit_file for targeted edits, write_file for new files)
+        5. Verify changes (diff, shell for tests)
+        6. Ask the user when you need a decision (ask_user)
+        7. Update task progress as you go (task_update)
+
+        Prefer edit_file over write_file for existing files — it's safer and more precise.
+        Prefer search_in_files over shell grep — it's more token-efficient.
+        Prefer web_fetch over shell curl — it extracts readable text automatically.
+        Use parallel to run independent tool calls concurrently (e.g. search 3 dirs at once).
+      constraints:
+        - Never delete files without asking the user first via ask_user
+        - Never push to git without asking the user first via ask_user
+        - Always verify changes with diff before moving on
+        - Break work into tasks for anything with more than 2 steps
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+      max_tokens: 8192
+      max_turns: 30
+      tool_timeout: 60
+
+    tools:
+      # ── Filesystem ──────────────────────────────────────────
+      - name: filesystem
+        source: builtin://filesystem        # read_file, write_file, list_dir
+      - name: edit_file
+        source: builtin://edit_file          # find-and-replace in files
+      - name: glob
+        source: builtin://glob               # find files by pattern (**/*.py)
+      - name: search_in_files
+        source: builtin://search_in_files    # regex search across files (grep)
+      - name: diff
+        source: builtin://diff               # unified diff between files
+
+      # ── Execution ───────────────────────────────────────────
+      - name: shell
+        source: builtin://shell              # run any shell command
+      - name: python_eval
+        source: builtin://python_eval        # execute Python snippets
+      - name: process_manager
+        source: builtin://process_manager    # start/stop background processes
+
+      # ── Web ─────────────────────────────────────────────────
+      - name: web_search
+        source: builtin://web_search         # search the web (Anthropic API)
+      - name: web_fetch
+        source: builtin://web_fetch          # fetch URL → readable text
+      - name: http_request
+        source: builtin://http_request       # full HTTP control (method/headers/body)
+
+      # ── Interaction ─────────────────────────────────────────
+      - name: ask_user
+        source: builtin://ask_user           # ask the user a question
+      - name: task_manager
+        source: builtin://task_manager       # track subtasks and progress
+
+      # ── Orchestration ─────────────────────────────────────────
+      - name: parallel
+        source: builtin://parallel           # run multiple tools concurrently

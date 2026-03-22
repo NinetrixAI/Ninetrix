@@ -210,13 +210,34 @@ The provider/model/temperature can always be overridden at runtime via environme
 
 ### Tool Sources
 
-Tools are declared in `agentfile.yaml` with a `source:` field:
+Tools are declared in `agentfile.yaml` with a `source:` field. The schema allows any `prefix://` URI — built-in and community sources are pluggable via the SDK's `ToolSource` ABC.
 
+| Source prefix | Protocol | Example |
+| ------------- | -------- | ------- |
+| `mcp://` | MCP Gateway HTTP proxy — routed via mcp-gateway + mcp-worker | `mcp://duckduckgo` |
+| `composio://` | Composio cloud action registry | `composio://GITHUB` |
+| `openapi://` | Any REST API with an OpenAPI 3.x spec — auto-generates tools from operationIds | `openapi://https://petstore.swagger.io/v3/openapi.json` |
+| `builtin://` | Built-in tools (bash, filesystem, memory, etc.) | `builtin://bash` |
+| `./` or `/` | Local @Tool Python files | `./tools/my_tool.py` |
+| `<custom>://` | Community plugins via `pip install ninetrix-source-X` (entry_points discovery) | `jira://my-instance` |
 
-| Source prefix | Protocol                                                    | Example             |
-| ------------- | ----------------------------------------------------------- | ------------------- |
-| `mcp://`      | MCP Gateway HTTP proxy — routed via mcp-gateway + mcp-worker | `mcp://duckduckgo`  |
-| `composio://` | Composio cloud action registry                              | `composio://GITHUB` |
+Tools can also declare `auth:`, `dependencies:`, and `base_url:` fields:
+
+```yaml
+tools:
+  - name: stripe
+    source: openapi://https://stripe.com/spec.json
+    actions: [createPaymentIntent, listCustomers]
+    auth:
+      type: bearer
+      token: ${STRIPE_API_KEY}
+    base_url: https://api.stripe.com
+  - name: ocr
+    source: ./tools/ocr.py
+    dependencies:
+      pip: [pytesseract]
+      apt: [tesseract-ocr]
+```
 
 
 **MCP tools** — the agent Docker never spawns MCP server subprocesses. All `mcp://` tools are proxied at runtime through the MCP gateway (`POST /v1/mcp/{workspace_id}`). The gateway routes each call to a connected mcp-worker, which runs the actual MCP server subprocess. Gateway connection is configured via `mcp_gateway:` in the yaml OR env vars at runtime:

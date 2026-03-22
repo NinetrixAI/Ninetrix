@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
 # docs: https://docs.ninetrix.io
-
+schema_version: "1.1"
 
 governance:
   max_budget_per_run: 1.00
@@ -11,26 +11,19 @@ governance:
       - shell_exec
   rate_limit: 10_requests_per_minute
 
-# triggers:
-#   - type: webhook
-#     endpoint: /run
+triggers:
+  - type: webhook
+    endpoint: /run
 
-persistence:
-  provider: "postgres"
-  url: "${DATABASE_URL}"
-
-execution:
-  mode: planned
-  thinking:
-    enabled: true
-    model: gemini-2.5-flash
-    provider: google
+# persistence:
+#   provider: "postgres"
+#   url: "${DATABASE_URL}"
 
 agents:
-  samata:
+  soliman-ha-ka-tan:
     metadata:
-      name: Samata
-      description: An AI agent built with Agentfile
+      name: soliman ha ka tan
+      description: help
       role: "AI Assistant"
       goal: "Help users accomplish their tasks accurately and efficiently"
       instructions: |
@@ -41,9 +34,13 @@ agents:
         - "Do not make up information or present speculation as fact"
         - "Stay within the scope of your defined role and goal"
     runtime:
-      provider: google
-      model: gemini-2.5-flash
+      provider: anthropic
+      model: claude-sonnet-4-6
       temperature: 0.2
+      # max_tokens: 8192             # max output tokens per LLM call
+      # max_turns: 20                # safety cap on agentic loop iterations
+      # tool_timeout: 30             # seconds before a tool call is aborted
+      # history_window_tokens: 90000 # sliding-window token budget
     tools:
       - name: web_search
         source: mcp://duckduckgo
@@ -55,7 +52,20 @@ agents:
     #   source: composio://GMAIL
     #   actions:             # optional: limit to specific actions
     #     - GMAIL_SEND_EMAIL
+    # Skills — reusable prompt-layer playbooks (SKILL.md with frontmatter)
+    # skills:
+    #   - hub://code-review@1.0.0        # from Skills Hub (version pinned)
+    #   - ./skills/my-playbook            # local directory with SKILL.md
     collaborators: []
+    # transfer_timeout: 300          # seconds before a collaborator transfer times out
+    # routing:                       # how to route to collaborators
+    #   mode: agent                  # "agent" (LLM decides) | "auto" (cheap router picks)
+    #   model: claude-haiku-4-5-20251001
+    # output_type:                   # structured JSON output (optional)
+    #   type: object
+    #   required: [answer]
+    #   properties:
+    #     answer: {type: string}
     # execution:
     #   mode: planned              # "direct" (default) | "planned" (plan-then-execute)
     #   verify_steps: true         # call a verifier LLM after each tool call
@@ -77,7 +87,7 @@ agents:
 #       human_approval:
 #         enabled: false              # skip approval gates in dev
 #     agents:
-#       samata:
+#       soliman-ha-ka-tan:
 #         runtime:
 #           model: claude-haiku-4-5-20251001   # cheaper model in dev
 #   prod:
@@ -85,7 +95,7 @@ agents:
 #       provider: postgres
 #       url: "${PROD_DATABASE_URL}"
 #     agents:
-#       samata:
+#       soliman-ha-ka-tan:
 #         runtime:
 #           resources:
 #             cpu: 2.0

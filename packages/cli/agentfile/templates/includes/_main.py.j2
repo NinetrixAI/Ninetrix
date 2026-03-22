@@ -105,8 +105,8 @@ async def main() -> None:
                 for _td in _local_tool_registry.all()
             ]
 {% endif %}
-{% if has_builtin_shell or has_builtin_filesystem %}
-            # Add builtin tool schemas (shell, filesystem)
+{% if has_any_builtin %}
+            # Add builtin tool schemas
             all_tool_defs += _BUILTIN_TOOL_DEFS
 {% endif %}
 {% if has_collaborators %}
@@ -268,7 +268,25 @@ async def main() -> None:
                     _replay_input = None
                 else:
                     try:
+{% if has_builtin_scheduler %}
+                        # Non-blocking input with reminder polling every 2 seconds
+                        import select as _select
+                        user_input = ""
+                        while not user_input:
+                            _fired = _drain_reminders()
+                            if _fired:
+                                _reminder_text = "\n".join(f"- {r}" for r in _fired)
+                                user_input = (
+                                    "[REMINDER FIRED] The following scheduled reminders just triggered:\n"
+                                    + _reminder_text + "\n"
+                                    + "Please notify me about these reminders now."
+                                )
+                                break
+                            if _select.select([sys.stdin], [], [], 2.0)[0]:
+                                user_input = input("> ").strip()
+{% else %}
                         user_input = input("> ").strip()
+{% endif %}
                     except (KeyboardInterrupt, EOFError):
                         print("\nBye.")
                         break

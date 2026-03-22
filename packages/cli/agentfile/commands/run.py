@@ -33,6 +33,18 @@ def _image_exists(image_ref: str) -> bool:
         return True
 
 
+def _load_agentfile_from_image(image_ref: str) -> AgentFile:
+    """Extract /app/agentfile.yaml from a Docker image and parse it."""
+    import subprocess
+    result = subprocess.run(
+        ["docker", "run", "--rm", "--entrypoint", "cat", image_ref, "/app/agentfile.yaml"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"docker run failed (exit {result.returncode})")
+    return AgentFile.from_string(result.stdout)
+
+
 def _auto_build(agent: AgentDef, af: AgentFile, agentfile_path: str, tag: str) -> None:
     """Validate + render templates + docker build for *agent*."""
     from agentfile.commands.build import _render_templates
@@ -189,11 +201,26 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     console.print()
     console.print("[bold purple]ninetrix run[/bold purple]\n")
 
-    try:
-        af = AgentFile.from_path(agentfile_path)
-    except (FileNotFoundError, ValueError) as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1)
+    # When --image is explicit and no --file was given, read the agentfile
+    # baked into the image instead of requiring a local file.
+    _file_was_explicit = agentfile_path != "agentfile.yaml" or image is None
+    if image and not _file_was_explicit:
+        try:
+            af = _load_agentfile_from_image(image)
+        except Exception as exc:
+            console.print(f"[yellow]Could not read agentfile from image:[/yellow] {exc}")
+            console.print("  [dim]Falling back to local agentfile.yaml …[/dim]\n")
+            try:
+                af = AgentFile.from_path(agentfile_path)
+            except (FileNotFoundError, ValueError) as exc2:
+                console.print(f"[red]{exc2}[/red]")
+                raise SystemExit(1)
+    else:
+        try:
+            af = AgentFile.from_path(agentfile_path)
+        except (FileNotFoundError, ValueError) as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise SystemExit(1)
 
     if environment:
         if environment not in af.environments:

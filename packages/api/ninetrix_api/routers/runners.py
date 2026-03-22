@@ -383,6 +383,18 @@ async def ingest_events(
                     log.info("team_completed | thread=%s routed_to=%s tokens=%d",
                              thread_id, routed_to, tokens_used)
 
+                elif event.type == "heartbeat":
+                    agent_id = data.get("agent_id", "")
+                    if agent_id:
+                        await conn.execute(
+                            """
+                            INSERT INTO agent_heartbeats (agent_id, last_seen)
+                            VALUES ($1, NOW())
+                            ON CONFLICT (agent_id) DO UPDATE SET last_seen = NOW()
+                            """,
+                            agent_id,
+                        )
+
                 else:
                     # Store unknown events in runner_events for debugging
                     await conn.execute(

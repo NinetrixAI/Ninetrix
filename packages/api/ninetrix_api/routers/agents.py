@@ -64,7 +64,11 @@ async def list_agents(
                           AND metadata->>'model' IS NOT NULL
                           AND metadata->>'model' != ''
                     ) models_sub
-                ) AS models
+                ) AS models,
+                (
+                    SELECT last_seen FROM agent_heartbeats
+                    WHERE agent_heartbeats.agent_id = pat.agent_id
+                ) AS last_heartbeat
             FROM per_agent_thread pat
             GROUP BY pat.agent_id
         )
@@ -87,5 +91,6 @@ async def list_agents(
             models=list(r["models"] or []),
             last_seen=r["last_seen"],
             last_status=r["last_status"] or "unknown",
+            last_heartbeat=r["last_heartbeat"],
         ))
     return Page(items=result, total=total, limit=limit, offset=offset)
