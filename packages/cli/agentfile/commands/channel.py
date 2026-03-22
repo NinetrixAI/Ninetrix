@@ -74,6 +74,81 @@ def _poll_for_messages(token: str, timeout: int = 30) -> list[dict]:
     return []
 
 
+def _register_with_api(
+    token: str,
+    bot_username: str,
+    chat_id: str,
+    agent_name: str | None,
+) -> bool:
+    """Register the channel with the Ninetrix API (local or cloud).
+
+    This creates the channel in the API DB, sets up the webhook (for cloud),
+    and binds the agent. Works with both local API and saas-api.
+    Returns True if registration succeeded.
+    """
+    from agentfile.core.config import resolve_api_url
+    from agentfile.core.auth import auth_headers
+
+    api_url = resolve_api_url()
+    headers = auth_headers(api_url)
+    if not headers:
+        # No auth available — skip API registration (local-only mode)
+        return False
+
+    try:
+        # 1. Create channel
+        resp = httpx.post(
+            f"{api_url}/v1/channels",
+            headers=headers,
+            json={
+                "channel_type": "telegram",
+                "name": f"@{bot_username}",
+                "config": {"bot_token": token},
+                "session_mode": "per_chat",
+                "routing_mode": "single",
+            },
+            timeout=15,
+        )
+        if resp.status_code not in (200, 201):
+            console.print(f"  [dim]API registration: {resp.status_code} — {resp.text[:100]}[/dim]")
+            return False
+
+        channel_data = resp.json()
+        channel_id = channel_data.get("id")
+
+        # 2. Verify channel (send the code we already verified via polling)
+        httpx.post(
+            f"{api_url}/v1/channels/{channel_id}/verify",
+            headers=headers,
+            json={"code": channel_data.get("config", {}).get("verification_code", "000000")},
+            timeout=10,
+        )
+
+        # 3. Bind agent if name provided
+        if agent_name:
+            httpx.post(
+                f"{api_url}/v1/channels/{channel_id}/agents",
+                headers=headers,
+                json={
+                    "agent_name": agent_name,
+                    "is_default": True,
+                },
+                timeout=10,
+            )
+
+        is_cloud = "ninetrix.io" in api_url or "localhost:8001" in api_url
+        mode = "cloud (webhook)" if is_cloud else "local (polling)"
+        console.print(f"  [dim]Registered with API → {mode}[/dim]")
+        return True
+
+    except httpx.ConnectError:
+        # API not running — that's fine for local-only use
+        return False
+    except Exception as exc:
+        console.print(f"  [dim]API registration skipped: {exc}[/dim]")
+        return False
+
+
 def setup_telegram_interactive(agent_name: str | None = None) -> bool:
     """Interactive Telegram setup flow. Returns True if verified successfully."""
     console.print()
@@ -122,7 +197,7 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
 
     bot_username = bot_info.get("username", "")
 
-    # Delete any existing webhook so polling works
+    # Delete any existing webhook so polling works (for local mode)
     _delete_telegram_webhook(token)
 
     # Save config immediately (even before verification)
@@ -151,7 +226,6 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
             text = (msg.get("text") or "").strip()
             if text.startswith("/start"):
                 chat_id = str(msg["chat"]["id"])
-                user_name = msg.get("from", {}).get("first_name", "there")
                 verified = True
                 break
         if verified:
@@ -165,21 +239,27 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
     _poll_for_messages(token, timeout=0)
 
     # Send confirmation to Telegram
-    _send_telegram_message(token, chat_id, (
-        f"✓ Connected to Ninetrix!"
-        + (f"\n\nAgent: {agent_name}" if agent_name else "")
-        + "\n\nSend me a message and I'll forward it to your agent."
-    ))
+    if agent_name:
+        welcome = (
+            f"Hey there! I'm *{agent_name}*.\n\n"
+            "All set up and ready to go. Just send me a message whenever you need anything."
+        )
+    else:
+        welcome = "Hey there! All set up and ready to go. Send me a message whenever you need anything."
+    _send_telegram_message(token, chat_id, welcome)
 
     console.print(f"\r  [green]✓[/green] Connected! Chat ID: [bold]{chat_id}[/bold]                       ")
 
-    # Save verified config
+    # Save verified config locally
     save_channel("telegram", {
         "bot_token": token,
         "bot_username": bot_username,
         "chat_id": chat_id,
         "verified": True,
     })
+
+    # Register with API (local or cloud) — creates channel + binds agent
+    _register_with_api(token, bot_username, chat_id, agent_name)
 
     console.print()
     console.print(f"  [green]Done![/green] Messages to [bold]@{bot_username}[/bold] will trigger your agent.")
@@ -199,10 +279,11 @@ def channel_cmd():
 
 @channel_cmd.command("connect")
 @click.argument("platform", type=click.Choice(["telegram"]))
-def connect(platform: str):
+@click.option("--agent", "-a", default=None, help="Agent name to bind to this channel")
+def connect(platform: str, agent: str | None):
     """Connect a messaging platform to your agents."""
     if platform == "telegram":
-        setup_telegram_interactive()
+        setup_telegram_interactive(agent_name=agent)
 
 
 @channel_cmd.command("disconnect")

@@ -42,6 +42,9 @@ jobs:
           mkdir -p packages/api/static/dashboard
           cp -r packages/dashboard/out/* packages/api/static/dashboard/
 
+      - name: Copy channels package into API build context
+        run: cp -r packages/channels packages/api/channels
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

@@ -5,6 +5,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
+
+# Install ninetrix-channels from the monorepo (not on PyPI)
+COPY channels/ /tmp/channels/
+RUN pip install --no-cache-dir /tmp/channels/ && rm -rf /tmp/channels/
+
 RUN pip install --no-cache-dir -e .
 
 COPY . .

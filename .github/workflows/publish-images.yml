@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "packages/api/**"
+      - "packages/channels/**"
       - "packages/mcp-gateway/**"
       - "packages/mcp-worker/**"
       - "packages/dashboard/**"
@@ -35,6 +36,8 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Copy channels package into API build context
+        run: cp -r packages/channels packages/api/channels
       - uses: docker/build-push-action@v6
         with:
           context: packages/api
