@@ -1,105 +1,36 @@
-# tracepad
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
-Local observability dashboard for [Ninetrix](https://ninetrix.io) agent runs.
+## Getting Started
 
-Tracepad connects to your local `api/` server and gives you a real-time window into every agent thread — LLM calls, tool invocations, handoffs between agents, token usage, timing, and full input/output at every step.
-
----
-
-## What it does
-
-- **Thread list** — every run with status, agent, model, token count, duration, and trigger type
-- **Trace view** — nested tree of every step: LLM prompts/responses, tool inputs/outputs, agent handoffs
-- **Timeline view** — Gantt chart of the run, color-coded by node type with millisecond precision
-- **Raw events** — full JSON of the underlying timeline events from the API
-- **Live mode** — auto-polls every 5 seconds; open threads poll every 3 seconds
-- **Light/dark mode** — persists across sessions
-- **API health indicator** — shows connection status and latency to the local API
-
----
-
-## Prerequisites
-
-The local API must be running before tracepad can show any data.
+First, run the development server:
 
 ```bash
-cd api
-pip install -e .
-cp .env.example .env   # set DATABASE_URL=postgresql://...
-uvicorn main:app --reload --port 8000
-```
-
----
-
-## Running tracepad
-
-```bash
-cd local-app
-npm install
 npm run dev
+# or
+yarn dev
+# or
+pnpm dev
+# or
+bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
----
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-## Configuration
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-By default tracepad connects to `http://localhost:8000`. Override with an environment variable:
+## Learn More
 
-```bash
-NEXT_PUBLIC_API_URL=http://localhost:9000 npm run dev
-```
+To learn more about Next.js, take a look at the following resources:
 
----
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-## Architecture
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-```
-local-app/
-├── src/
-│   ├── app/
-│   │   ├── layout.tsx          # Root layout — fonts, theme init script
-│   │   ├── globals.css         # Design tokens, light/dark CSS variables
-│   │   ├── page.tsx            # Redirects → /threads
-│   │   └── threads/
-│   │       ├── page.tsx        # Server wrapper
-│   │       └── ThreadsClient.tsx  # Full dashboard — table, trace drawer, nav
-│   ├── components/
-│   │   └── ThemeToggle.tsx     # Light/dark pill toggle
-│   └── lib/
-│       ├── api.ts              # API client (listThreads, getThreadTimeline)
-│       └── trace.ts            # TimelineEvent[] → TraceNode[] converter
-```
+## Deploy on Vercel
 
-**Data flow:**
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
-```
-agentfile run
-    │
-    └── agent container → POST /v1/runners/events → api/ → PostgreSQL
-                                                              │
-                                                         tracepad polls
-                                                    GET /threads
-                                                    GET /threads/{id}/timeline
-```
-
----
-
-## Node types
-
-| Symbol | Type | Color | Content |
-|--------|------|-------|---------|
-| ◈ | LLM | Blue | Model name, prompt, response, token counts, estimated cost |
-| ◎ | Tool | Green | Tool name, input arguments, output result, duration |
-| ◀▶ | Handoff | Violet | Target agent name, transfer message |
-| ◉ | Thinking | Amber | Reasoning text |
-
----
-
-## Tech
-
-- **Next.js 16** (App Router)
-- **Tailwind CSS v4**
-- **Fonts:** Syne · DM Sans · JetBrains Mono
-- No component library — all UI is hand-built
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

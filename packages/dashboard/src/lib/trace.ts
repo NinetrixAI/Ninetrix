@@ -44,13 +44,12 @@ function estimateCost(model: string, inputTokens: number, outputTokens: number):
 
 export function timelineEventsToTraceNodes(
   events: TimelineEvent[],
-  thread: ThreadSummary
+  thread: ThreadSummary,
 ): TraceNode[] {
   if (!events.length) return [];
 
   const baseTs = new Date(events[0].ts).getTime();
 
-  // Build trace_id → agent_id mapping
   const traceToAgent = new Map<string, string>();
   const agentParentTrace = new Map<string, string | null>();
   const agentTraceId = new Map<string, string>();
@@ -63,37 +62,26 @@ export function timelineEventsToTraceNodes(
     agentTraceId.set(ev.agent_id, ev.trace_id);
   }
 
-  // Compute depth for each agent recursively
   const agentDepths = new Map<string, number>();
   function getDepth(agentId: string, visited = new Set<string>()): number {
     if (agentDepths.has(agentId)) return agentDepths.get(agentId)!;
-    if (visited.has(agentId)) return 0; // cycle guard
+    if (visited.has(agentId)) return 0;
     visited.add(agentId);
 
     const parentTraceId = agentParentTrace.get(agentId);
-    if (!parentTraceId) {
-      agentDepths.set(agentId, 0);
-      return 0;
-    }
+    if (!parentTraceId) { agentDepths.set(agentId, 0); return 0; }
     const parentAgentId = traceToAgent.get(parentTraceId);
-    if (!parentAgentId) {
-      agentDepths.set(agentId, 1);
-      return 1;
-    }
+    if (!parentAgentId) { agentDepths.set(agentId, 1); return 1; }
     const depth = getDepth(parentAgentId, visited) + 1;
     agentDepths.set(agentId, depth);
     return depth;
   }
-  for (const agentId of agentParentTrace.keys()) {
-    getDepth(agentId);
-  }
+  for (const agentId of agentParentTrace.keys()) getDepth(agentId);
 
   const nodes: TraceNode[] = [];
   let counter = 0;
-  // Per-agent FIFO queue of tool nodes awaiting their result.
-  // Keyed by agent_id; falls back to FIFO when tool_name is null on tool_result.
   const pendingToolQueues = new Map<string, TraceNode[]>();
-  const pendingUserContent = new Map<string, string>(); // per-agent
+  const pendingUserContent = new Map<string, string>();
 
   for (const ev of events) {
     const offsetMs = new Date(ev.ts).getTime() - baseTs;
@@ -107,25 +95,13 @@ export function timelineEventsToTraceNodes(
 
     if (ev.type === "thinking") {
       nodes.push({
-        id: makeId(),
-        parentId: null,
-        depth,
-        type: "thinking",
-        label: "Reasoning",
-        agentId: ev.agent_id,
-        status: "success",
-        startOffsetMs: offsetMs,
-        durationMs: ev.duration_ms ?? null,
-        absoluteStartIso: ev.ts,
-        absoluteEndIso: null,
-        model: null,
-        inputTokens: ev.tokens_in ?? null,
-        outputTokens: ev.tokens_out ?? null,
+        id: makeId(), parentId: null, depth, type: "thinking",
+        label: "Reasoning", agentId: ev.agent_id, status: "success",
+        startOffsetMs: offsetMs, durationMs: ev.duration_ms ?? null,
+        absoluteStartIso: ev.ts, absoluteEndIso: null,
+        model: null, inputTokens: ev.tokens_in ?? null, outputTokens: ev.tokens_out ?? null,
         estimatedCostUsd: null,
-        llmContent: null,
-        toolContent: null,
-        thinkingContent: { text: ev.content },
-        handoffContent: null,
+        llmContent: null, toolContent: null, thinkingContent: { text: ev.content }, handoffContent: null,
       });
       continue;
     }
@@ -133,42 +109,21 @@ export function timelineEventsToTraceNodes(
     if (ev.type === "assistant_message") {
       const inputTok = ev.tokens_in ?? null;
       const outputTok = ev.tokens_out ?? null;
-      const cost =
-        inputTok != null && outputTok != null
-          ? estimateCost(thread.model, inputTok, outputTok)
-          : null;
-      // ev.ts is the LLM *completion* time; back-calculate the start so the bar
-      // spans [user_message → LLM_response] instead of [LLM_response → LLM_response+duration].
+      const cost = inputTok != null && outputTok != null
+        ? estimateCost(thread.model, inputTok, outputTok) : null;
       const llmDurationMs = ev.duration_ms ?? null;
-      const llmStartOffsetMs =
-        llmDurationMs != null ? Math.max(0, offsetMs - llmDurationMs) : offsetMs;
-      const llmStartIso =
-        llmDurationMs != null
-          ? new Date(new Date(ev.ts).getTime() - llmDurationMs).toISOString()
-          : ev.ts;
+      const llmStartOffsetMs = llmDurationMs != null ? Math.max(0, offsetMs - llmDurationMs) : offsetMs;
+      const llmStartIso = llmDurationMs != null
+        ? new Date(new Date(ev.ts).getTime() - llmDurationMs).toISOString() : ev.ts;
       nodes.push({
-        id: makeId(),
-        parentId: null,
-        depth,
-        type: "llm",
-        label: ev.agent_id,
-        agentId: ev.agent_id,
-        status: "success",
-        startOffsetMs: llmStartOffsetMs,
-        durationMs: llmDurationMs,
-        absoluteStartIso: llmStartIso,
-        absoluteEndIso: null,
-        model: thread.model || null,
-        inputTokens: inputTok,
-        outputTokens: outputTok,
+        id: makeId(), parentId: null, depth, type: "llm",
+        label: ev.agent_id, agentId: ev.agent_id, status: "success",
+        startOffsetMs: llmStartOffsetMs, durationMs: llmDurationMs,
+        absoluteStartIso: llmStartIso, absoluteEndIso: null,
+        model: thread.model || null, inputTokens: inputTok, outputTokens: outputTok,
         estimatedCostUsd: cost,
-        llmContent: {
-          prompt: pendingUserContent.get(ev.agent_id) ?? "",
-          response: ev.content,
-        },
-        toolContent: null,
-        thinkingContent: null,
-        handoffContent: null,
+        llmContent: { prompt: pendingUserContent.get(ev.agent_id) ?? "", response: ev.content },
+        toolContent: null, thinkingContent: null, handoffContent: null,
       });
       pendingUserContent.delete(ev.agent_id);
       continue;
@@ -176,53 +131,25 @@ export function timelineEventsToTraceNodes(
 
     if (ev.type === "tool_call") {
       const isHandoff = ev.tool_name === "transfer_to_agent" || !!ev.target_agent;
-
       if (isHandoff) {
         nodes.push({
-          id: makeId(),
-          parentId: null,
-          depth,
-          type: "handoff",
-          label: `→ ${ev.target_agent ?? "agent"}`,
-          agentId: ev.agent_id,
-          status: "success",
-          startOffsetMs: offsetMs,
-          durationMs: ev.duration_ms ?? null,
-          absoluteStartIso: ev.ts,
-          absoluteEndIso: null,
-          model: null,
-          inputTokens: null,
-          outputTokens: null,
-          estimatedCostUsd: null,
-          llmContent: null,
-          toolContent: null,
-          thinkingContent: null,
-          handoffContent: {
-            targetAgent: ev.target_agent ?? "unknown",
-            message: ev.content,
-          },
+          id: makeId(), parentId: null, depth, type: "handoff",
+          label: `-> ${ev.target_agent ?? "agent"}`, agentId: ev.agent_id, status: "success",
+          startOffsetMs: offsetMs, durationMs: ev.duration_ms ?? null,
+          absoluteStartIso: ev.ts, absoluteEndIso: null,
+          model: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null,
+          llmContent: null, toolContent: null, thinkingContent: null,
+          handoffContent: { targetAgent: ev.target_agent ?? "unknown", message: ev.content },
         });
       } else {
         const node: TraceNode = {
-          id: makeId(),
-          parentId: null,
-          depth,
-          type: "tool",
-          label: ev.tool_name ?? "tool",
-          agentId: ev.agent_id,
-          status: "running",
-          startOffsetMs: offsetMs,
-          durationMs: null,
-          absoluteStartIso: ev.ts,
-          absoluteEndIso: null,
-          model: null,
-          inputTokens: null,
-          outputTokens: null,
-          estimatedCostUsd: null,
-          llmContent: null,
-          toolContent: { input: ev.content, output: "" },
-          thinkingContent: null,
-          handoffContent: null,
+          id: makeId(), parentId: null, depth, type: "tool",
+          label: ev.tool_name ?? "tool", agentId: ev.agent_id, status: "running",
+          startOffsetMs: offsetMs, durationMs: null,
+          absoluteStartIso: ev.ts, absoluteEndIso: null,
+          model: null, inputTokens: null, outputTokens: null, estimatedCostUsd: null,
+          llmContent: null, toolContent: { input: ev.content, output: "" },
+          thinkingContent: null, handoffContent: null,
         };
         const queue = pendingToolQueues.get(ev.agent_id) ?? [];
         queue.push(node);
@@ -234,11 +161,8 @@ export function timelineEventsToTraceNodes(
 
     if (ev.type === "tool_result") {
       const queue = pendingToolQueues.get(ev.agent_id) ?? [];
-      // Match by tool_name if available, otherwise pop the oldest pending tool (FIFO)
-      let pendingIdx = ev.tool_name
-        ? queue.findIndex((n) => n.label === ev.tool_name)
-        : 0;
-      if (pendingIdx < 0) pendingIdx = 0; // fallback to FIFO if name not found
+      let pendingIdx = ev.tool_name ? queue.findIndex((n) => n.label === ev.tool_name) : 0;
+      if (pendingIdx < 0) pendingIdx = 0;
       const pending = queue[pendingIdx];
       if (pending?.toolContent) {
         pending.toolContent.output = ev.content;
@@ -251,12 +175,7 @@ export function timelineEventsToTraceNodes(
     }
   }
 
-  // Mark last node running if thread still in progress
-  if (
-    thread.status === "in_progress" ||
-    thread.status === "running" ||
-    thread.status === "started"
-  ) {
+  if (thread.status === "in_progress" || thread.status === "running" || thread.status === "started") {
     const last = nodes[nodes.length - 1];
     if (last) last.status = "running";
   }
