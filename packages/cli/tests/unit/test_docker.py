@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,10 +26,16 @@ class TestClient:
 
 
 class TestBuildImage:
+    @staticmethod
+    def _mock_proc(lines, rc=0):
+        proc = MagicMock()
+        proc.stdout = io.StringIO("".join(lines))
+        proc.poll = MagicMock(side_effect=[None] * len(lines) + [rc])
+        proc.wait.return_value = rc
+        return proc
+
     def test_builds_and_returns_tag(self, tmp_path):
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter(["#1 [1/3] FROM python:3.12\n"])
-        mock_proc.wait.return_value = 0
+        mock_proc = self._mock_proc(["#1 [1/3] FROM python:3.12\n"])
 
         with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
@@ -37,9 +44,7 @@ class TestBuildImage:
         assert result == "ninetrix/test:v1"
 
     def test_tag_already_in_name(self, tmp_path):
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter([])
-        mock_proc.wait.return_value = 0
+        mock_proc = self._mock_proc([])
 
         with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
@@ -48,9 +53,7 @@ class TestBuildImage:
         assert result == "ninetrix/test:custom"
 
     def test_exits_on_build_failure(self, tmp_path):
-        mock_proc = MagicMock()
-        mock_proc.stdout = iter(["ERROR: build failed\n"])
-        mock_proc.wait.return_value = 1
+        mock_proc = self._mock_proc(["ERROR: build failed\n"], rc=1)
 
         with patch("subprocess.Popen", return_value=mock_proc):
             from agentfile.core.docker import build_image
