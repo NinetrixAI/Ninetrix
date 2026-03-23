@@ -158,6 +158,8 @@ Each command lives in `agentfile/commands/`:
 - `deploy.py` — wraps build + `docker push` + prints the resulting `docker run` command
 - `mcp.py` — manages MCP tool servers: `list`, `add` (writes to `~/.agentfile/mcp.yaml`), `test` (connects via MCP SDK and prints tool schemas)
 - `migrate.py` — upgrades `agentfile.yaml` to the latest schema version; supports `--dry-run`
+- `hub.py` — unified hub commands: `ninetrix hub search <query>` (searches both tools and skills), `ninetrix hub add <name>` (adds tool/skill to agentfile.yaml, suggests companion skills)
+- `tools.py` — tool-specific commands: `ninetrix tools search/list/info/add/inspect` — search Tool Hub, list installed, show TOOL.yaml details, add to agentfile.yaml, inspect supply chain (SHA256, static analysis)
 
 ### Core Models (`agentfile/core/models.py`)
 
@@ -214,6 +216,7 @@ Tools are declared in `agentfile.yaml` with a `source:` field. The schema allows
 
 | Source prefix | Protocol | Example |
 | ------------- | -------- | ------- |
+| `hub://` | Tool Hub registry — resolved at build time from TOOL.yaml manifests | `hub://gh` |
 | `mcp://` | MCP Gateway HTTP proxy — routed via mcp-gateway + mcp-worker | `mcp://duckduckgo` |
 | `composio://` | Composio cloud action registry | `composio://GITHUB` |
 | `openapi://` | Any REST API with an OpenAPI 3.x spec — auto-generates tools from operationIds | `openapi://https://petstore.swagger.io/v3/openapi.json` |
@@ -520,6 +523,70 @@ All values below are read at container startup — **no rebuild needed**. Set th
 | `AGENTFILE_APPROVAL_ENABLED` | `true` | Toggle HITL approval gate on/off |
 
 Implementation: `run.py` and `up.py/_build_agent_env()` iterate `os.environ` and call `env.setdefault(k, v)` for every key starting with `AGENTFILE_`.
+
+### Tool Hub (`hub://` syntax)
+
+The Tool Hub is a community registry of TOOL.yaml manifests at `public/tools-hub/` (repo: `github.com:Ninetrix-ai/tools-hub`). Tools declared as `hub://name` in agentfile.yaml are resolved at build time.
+
+**How it works:**
+1. CLI fetches `registry.json` from the Tool Hub (contains SHA256 hashes per file)
+2. Resolves the tool's `TOOL.yaml` manifest
+3. Verifies SHA256 hash for supply chain integrity
+4. Auto-generates Dockerfile install commands from declarative `dependencies`
+5. Forwards required credentials from host env into container at runtime
+
+**TOOL.yaml format:**
+```yaml
+name: gh
+description: GitHub CLI tool
+source:
+  type: mcp | openapi | local | cli    # how the tool runs
+  package: "@modelcontextprotocol/server-github"   # for MCP type
+  spec_url: https://...                             # for OpenAPI type
+dependencies:
+  pip: [package1, package2]
+  apt: [package1]
+  npm: [package1]                       # auto-installs Node.js 22
+  apt_repo:                             # auto-adds APT repo with keyring
+    - url: https://...
+      key_url: https://...
+      name: repo-name
+credentials:
+  - env: GITHUB_TOKEN
+    label: "GitHub personal access token"
+credential_aliases:
+  GITHUB_TOKEN: GH_TOKEN               # maps common env var names
+skill_set:                              # companion skills (oven + baker pattern)
+  - gh-master
+```
+
+**Declarative Dockerfile generation:**
+- `dependencies.npm` -- auto-installs Node.js 22 + npm packages
+- `dependencies.apt_repo` -- auto-adds APT repo with keyring
+- `dependencies.apt/pip` -- standard package install
+- No shell commands in TOOL.yaml -- everything is declarative
+
+**CLI commands:**
+```bash
+ninetrix hub search "github"          # searches BOTH tools and skills
+ninetrix hub add gh                    # adds hub://gh to agentfile.yaml, suggests companion skills
+ninetrix tools search "database"       # tool-specific search
+ninetrix tools list                    # list all available tools
+ninetrix tools info gh                 # show TOOL.yaml details
+ninetrix tools add gh                  # add tool to agentfile.yaml
+ninetrix tools inspect gh              # supply chain inspection: SHA256, static analysis
+```
+
+**Credential forwarding** (`run.py`):
+- Reads TOOL.yaml `credentials` and `credential_aliases` at runtime
+- Forwards matching env vars from host into the Docker container
+- No secrets baked into images
+
+**Supply chain protection:**
+- SHA256 verification of every TOOL.yaml against registry.json
+- Static analysis for dangerous code patterns (CI workflow)
+- `ninetrix tools inspect` shows hash, dependencies, and credential requirements
+- Consent prompt before installing new tools
 
 ### Known Gotchas
 

@@ -51,8 +51,8 @@ async def _init_mcp_gateway(http: httpx.AsyncClient) -> tuple[dict, list]:
     """
     if not _MCP_GATEWAY_URL:
         print(
-            "[mcp-gateway] No gateway URL configured. "
-            "Set MCP_GATEWAY_URL env var or add 'mcp_gateway.url' to agentfile.yaml.",
+            "[mcp-gateway] MCP tools require a running gateway. "
+            "Start one with: ninetrix dev --mcp",
             file=sys.stderr, flush=True,
         )
         return {}, []

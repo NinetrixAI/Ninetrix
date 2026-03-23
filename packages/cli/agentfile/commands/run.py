@@ -270,14 +270,11 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
         if value:
             env[key_var] = value
         else:
-            console.print(f"  [yellow]{key_var}[/yellow] is not set.\n")
-            console.print("  You can set it permanently by adding this to your shell profile:\n")
-            console.print(f"    [dim]export {key_var}=your-key-here[/dim]\n")
-            value = click.prompt(f"  Enter {key_var} for this session", hide_input=True).strip()
-            if not value:
-                console.print("[red]No API key provided. Aborting.[/red]")
-                raise SystemExit(1)
-            env[key_var] = value
+            console.print(
+                f"\n[red]Error:[/red] {key_var} is not set.\n"
+                f"Set it with:  [dim]export {key_var}=your-key-here[/dim]\n"
+            )
+            raise SystemExit(1)
 
     # Forward verifier API key if it uses a different provider than the main agent
     eff_execution = af.effective_execution(agent)

@@ -59,7 +59,13 @@ def _render_templates(
         _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
         shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
     else:
-        console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e /path/to/sdk")
+        # In dev context (monorepo), show the local SDK path; otherwise suggest PyPI install
+        _cli_root = Path(__file__).resolve().parents[2]  # .../packages/cli
+        _local_sdk = _cli_root.parent.parent.parent / "sdk"  # .../ninetrix-oss/../../sdk
+        if (_local_sdk / "src" / "ninetrix").is_dir():
+            console.print(f"  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e {_local_sdk}")
+        else:
+            console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install ninetrix-sdk")
 
     # Copy local @Tool Python files into the build context under tools/
     if ctx.get("has_local_tools") and ctx.get("local_source_paths"):

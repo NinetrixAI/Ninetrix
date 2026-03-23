@@ -83,7 +83,7 @@ async def main() -> None:
             )
             sessions_by_tool, mcp_tool_defs = await _init_mcp_gateway(_gw_http)
             if not sessions_by_tool:
-                print("[warning] MCP Gateway returned no tools — check worker connection.", file=sys.stderr)
+                print("[warning] MCP Gateway returned no tools. Start the gateway with: ninetrix dev --mcp", file=sys.stderr)
 {% else %}
             sessions_by_tool: dict = {}
             mcp_tool_defs: list = []

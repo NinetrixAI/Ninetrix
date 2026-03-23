@@ -242,7 +242,23 @@ def run_container(
     cmd.append(image_name)
 
     try:
-        subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0 and result.stderr:
+            stderr_lower = result.stderr.lower()
+            if "port is already allocated" in stderr_lower or "address already in use" in stderr_lower:
+                # Extract the port number from the error message if possible
+                import re as _re
+                port_match = _re.search(r"0\.0\.0\.0:(\d+)", result.stderr)
+                port_hint = port_match.group(1) if port_match else "the requested port"
+                console.print(
+                    f"\n[red]Error:[/red] Port {port_hint} is already in use.\n"
+                    "  Stop the existing container with: [bold]docker ps[/bold] then [bold]docker stop <container>[/bold]\n"
+                    "  Or change the port in your agentfile.yaml triggers section.\n"
+                )
+                sys.exit(1)
+            else:
+                # Let other Docker errors print through as-is
+                console.print(result.stderr.rstrip())
     except FileNotFoundError:
         console.print("[red]`docker` CLI not found.[/red] Make sure Docker Desktop is installed.")
         sys.exit(1)
