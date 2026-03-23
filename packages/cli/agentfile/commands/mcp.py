@@ -31,7 +31,7 @@ console = Console()
 
 def _gw_url() -> str:
     """HTTP base URL of the gateway (converts ws:// → http://)."""
-    raw = os.environ.get("MCP_GATEWAY_URL", "http://localhost:8080")
+    raw = os.environ.get("MCP_GATEWAY_URL", "http://localhost:9090")
     return raw.replace("ws://", "http://").replace("wss://", "https://")
 
 

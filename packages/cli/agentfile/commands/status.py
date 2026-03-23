@@ -112,7 +112,7 @@ def _rows_from_docker(
 
 def _print_gateway_status() -> None:
     """Print a single-line MCP Gateway health summary."""
-    gw_url = os.environ.get("MCP_GATEWAY_URL", "http://localhost:8080")
+    gw_url = os.environ.get("MCP_GATEWAY_URL", "http://localhost:9090")
     try:
         health = httpx.get(f"{gw_url}/health", timeout=2).json()
         worker_count = health.get("connected_workers", 0)

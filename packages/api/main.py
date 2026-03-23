@@ -110,4 +110,14 @@ async def root():
 # Serve the pre-built Next.js dashboard (static export) at /dashboard
 _dashboard_dir = Path(__file__).parent / "static" / "dashboard"
 if _dashboard_dir.exists():
+
+    @app.get("/dashboard")
+    async def dashboard_index():
+        """Serve dashboard index directly to avoid 307 redirect from /dashboard to /dashboard/."""
+        from fastapi.responses import FileResponse
+
+        return FileResponse(
+            _dashboard_dir / "index.html", media_type="text/html"
+        )
+
     app.mount("/dashboard", StaticFiles(directory=str(_dashboard_dir), html=True), name="dashboard")

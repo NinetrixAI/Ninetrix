@@ -115,9 +115,9 @@ def _is_local_api_running() -> bool:
 
 
 def _is_gateway_running() -> bool:
-    """Return True if the local MCP Gateway is reachable on localhost:8080."""
+    """Return True if the local MCP Gateway is reachable on localhost:9090."""
     try:
-        r = httpx.get("http://localhost:8080/health", timeout=1.0)
+        r = httpx.get("http://localhost:9090/health", timeout=1.0)
         return r.status_code < 500
     except Exception:
         return False
