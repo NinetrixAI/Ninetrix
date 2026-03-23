@@ -1,3 +1,5 @@
+schema_version: "1.1"
+
 agents:
   lead:
     metadata:
@@ -16,6 +18,10 @@ agents:
       model: claude-sonnet-4-6
       temperature: 0.3
 
+    tools:
+      - name: bash
+        source: builtin://bash
+
     collaborators:
       - researcher
       - writer
@@ -27,7 +33,7 @@ agents:
       role: Information gatherer
       goal: Research a topic thoroughly using multiple search queries
       instructions: |
-        Search the web using multiple targeted queries. Gather facts,
+        Search for information using bash tools (curl, etc.). Gather facts,
         statistics, and diverse perspectives. Return structured findings
         with source URLs.
 
@@ -37,8 +43,8 @@ agents:
       temperature: 0.1
 
     tools:
-      - name: web_search
-        source: mcp://brave-search
+      - name: bash
+        source: builtin://bash
 
   writer:
     metadata:
@@ -54,6 +60,10 @@ agents:
       provider: anthropic
       model: claude-sonnet-4-6
       temperature: 0.5
+
+    tools:
+      - name: bash
+        source: builtin://bash
 
   reviewer:
     metadata:
@@ -71,3 +81,7 @@ agents:
       provider: anthropic
       model: claude-haiku-4-5-20251001
       temperature: 0.2
+
+    tools:
+      - name: bash
+        source: builtin://bash

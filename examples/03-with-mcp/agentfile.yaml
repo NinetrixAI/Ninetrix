@@ -1,3 +1,5 @@
+schema_version: "1.1"
+
 # This example requires the MCP gateway to be running.
 # Start it with: ninetrix dev
 #

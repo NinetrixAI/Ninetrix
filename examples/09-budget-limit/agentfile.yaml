@@ -1,3 +1,5 @@
+schema_version: "1.1"
+
 governance:
   max_budget_per_run: 0.005          # hard cap — agent exits when this is reached
   budget_warning_usd: 0.003          # soft warning logged + event fired at 60% of cap

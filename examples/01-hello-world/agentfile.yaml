@@ -1,12 +1,14 @@
+schema_version: "1.1"
+
 agents:
   hello-world:
     metadata:
       name: hello-world
       role: Helpful assistant
-      goal: Answer the user's question using web search when needed
+      goal: Answer the user's question clearly and accurately
       instructions: |
-        You are a helpful assistant. Use the web_search tool to look up
-        current information when you need it. Be concise and accurate.
+        You are a helpful assistant. Use the bash tool to look up
+        information or run commands when needed. Be concise and accurate.
 
     runtime:
       provider: anthropic
@@ -14,5 +16,5 @@ agents:
       temperature: 0.2
 
     tools:
-      - name: web_search
-        source: mcp://brave-search
+      - name: bash
+        source: builtin://bash

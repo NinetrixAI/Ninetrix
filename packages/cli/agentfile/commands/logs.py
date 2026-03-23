@@ -157,9 +157,10 @@ def logs_cmd(
 
     def _fmt(name: str, color: str, line: str) -> str:
         ts, msg = _strip_ts(line)
-        label = f"[{color}][{name:<{pad}}][/{color}]"
+        label = f"[{color}]\\[{name:<{pad}}][/{color}]"
         ts_part = f"[dim]{ts}[/dim] " if ts else ""
-        return f"{label} {ts_part}{msg}"
+        safe_msg = msg.replace("[", "\\[")
+        return f"{label} {ts_part}{safe_msg}"
 
     if not follow:
         for name, container, color in containers:

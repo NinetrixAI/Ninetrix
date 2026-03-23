@@ -1,3 +1,5 @@
+schema_version: "1.1"
+
 governance:
   budget_warning_usd: 0.0010 # $0.0010
   human_approval:

@@ -1,3 +1,5 @@
+schema_version: "1.1"
+
 governance:
   max_budget_per_run: 0.50           # generous budget so rate-limiting is the constraint
   rate_limit: 3_requests_per_minute  # only 3 LLM calls allowed per 60 s

@@ -81,11 +81,13 @@ def _build_one(
 ) -> tuple[bool, str, list[str]]:
     """Render templates and build one image in a worker thread.
 
-    Returns (success, full_tag, log_lines). Never prints to console directly
-    so it is safe to call from multiple threads simultaneously.
+    Returns (success, full_tag, log_lines). Uses ``docker buildx build``
+    (BuildKit) so that ``RUN --mount=type=cache`` directives in the
+    generated Dockerfile work correctly — matching the single-agent path.
     """
-    import docker as _docker
-    from docker.errors import DockerException as _DE
+    import os
+    import re
+    import subprocess
 
     lines: list[str] = []
     with tempfile.TemporaryDirectory(prefix=f"agentfile-build-{agent_name}-") as tmp:
@@ -93,37 +95,46 @@ def _build_one(
         shutil.copy(agentfile_path, ctx / "agentfile.yaml")
         _render_templates(agent_def, af, ctx, agentfile_path)
         full_tag = agent_def.image_name(tag)
-        try:
-            client = _docker.from_env()
-            _img, logs = client.images.build(
-                path=str(ctx), tag=full_tag, rm=True, forcerm=True,
-            )
-            for chunk in logs:
-                line = chunk.get("stream", "").rstrip()
-                if line:
-                    lines.append(line)
+
+        cmd = [
+            "docker", "buildx", "build",
+            "--tag", full_tag,
+            "--load",
+            "--progress=plain",
+            str(ctx),
+        ]
+
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env={**os.environ, "DOCKER_BUILDKIT": "1"},
+        )
+
+        for raw_line in proc.stdout.splitlines():
+            line = raw_line.rstrip()
+            if line:
+                lines.append(line)
+
+        if proc.returncode == 0:
             return True, full_tag, lines
-        except _DE as exc:
-            import re
-            if hasattr(exc, "build_log"):
-                for entry in exc.build_log:
-                    line = (entry.get("stream") or entry.get("error") or "").strip()
-                    if line:
-                        line = re.sub(r"\x1b\[[0-9;]*m", "", line)
-                        lines.append(line)
-            full_output = "\n".join(lines)
-            apt_matches = re.findall(r"Unable to locate package\s+(\S+)", full_output)
-            npm_matches = re.findall(r"npm error 404\s.*'([^']+)'", full_output)
-            pip_matches = re.findall(r"No matching distribution found for\s+(\S+)", full_output)
-            pkg_matches = apt_matches + npm_matches + pip_matches
-            if pkg_matches:
-                error_msg = (
-                    f"Package not found: {', '.join(pkg_matches)}. "
-                    f"Check the spelling in your agentfile.yaml 'packages' list."
-                )
-            else:
-                error_msg = str(exc)
-            return False, full_tag, [error_msg]
+
+        # Build failed — try to extract useful error info
+        full_output = "\n".join(lines)
+        apt_matches = re.findall(r"Unable to locate package\s+(\S+)", full_output)
+        npm_matches = re.findall(r"npm error 404\s.*'([^']+)'", full_output)
+        pip_matches = re.findall(r"No matching distribution found for\s+(\S+)", full_output)
+        pkg_matches = apt_matches + npm_matches + pip_matches
+        if pkg_matches:
+            error_msg = (
+                f"Package not found: {', '.join(pkg_matches)}. "
+                f"Check the spelling in your agentfile.yaml 'packages' list."
+            )
+        else:
+            error_lines = [l for l in lines[-20:] if "ERROR" in l or "error" in l.lower()]
+            error_msg = error_lines[-1] if error_lines else "build failed (see logs)"
+        return False, full_tag, [error_msg]
 
 
 @click.command("build")
