@@ -143,10 +143,11 @@ def init_cmd(name: str | None, provider: str | None, yes: bool, output: str) -> 
             masked = existing_key[:8] + "..." + existing_key[-4:] if len(existing_key) > 16 else "***"
             console.print(f"  [green]✓[/green] {env_var} found ({masked})\n")
         else:
-            api_key = Prompt.ask(f"  Enter your {provider_display} API key")
+            api_key = Prompt.ask(f"  Enter your {provider_display} API key", password=True)
             if api_key.strip():
                 _save_api_key_to_dotenv(env_var, api_key.strip())
-                console.print("  [green]✓[/green] Saved to .env\n")
+                masked = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 16 else "***"
+                console.print(f"  [green]✓[/green] Saved to .env ({masked})\n")
             else:
                 console.print(f"  [dim]Skipped. Set {env_var} in .env or your shell before running.[/dim]\n")
 

@@ -53,7 +53,7 @@ _DOCKER_COMMANDS = frozenset({
 
 
 @click.group()
-@click.version_option(__version__, "--version", "-V")
+@click.version_option(f"v{__version__}", "--version", "-V", prog_name="Ninetrix")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """[bold]Ninetrix[/bold] — build and deploy AI agents as containers.

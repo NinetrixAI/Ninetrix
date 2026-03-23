@@ -51,21 +51,15 @@ def _render_templates(
     entrypoint = env.get_template("entrypoint.py.j2").render(**ctx)
     (context_dir / "entrypoint.py").write_text(entrypoint)
 
-    # Always bundle the ninetrix SDK into the build context so every container
-    # has it available at runtime (needed for local @Tool dispatch, telemetry, etc.)
+    # Bundle the ninetrix SDK into the build context if installed on the host.
+    # The container also pip-installs ninetrix-sdk, so this is optional — it just
+    # speeds up builds by avoiding a PyPI fetch. Only warn if local @Tool files
+    # need host-side discovery and the SDK is missing.
     import importlib.util
     _spec = importlib.util.find_spec("ninetrix")
     if _spec and _spec.submodule_search_locations:
         _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
         shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
-    else:
-        # In dev context (monorepo), show the local SDK path; otherwise suggest PyPI install
-        _cli_root = Path(__file__).resolve().parents[2]  # .../packages/cli
-        _local_sdk = _cli_root.parent.parent.parent / "sdk"  # .../ninetrix-oss/../../sdk
-        if (_local_sdk / "src" / "ninetrix").is_dir():
-            console.print(f"  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install -e {_local_sdk}")
-        else:
-            console.print("  [yellow]Warning:[/yellow] ninetrix SDK not found — run: pip install ninetrix-sdk")
 
     # Copy local @Tool Python files into the build context under tools/
     if ctx.get("has_local_tools") and ctx.get("local_source_paths"):

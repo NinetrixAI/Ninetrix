@@ -13,9 +13,11 @@ def _post_runner_event(event_type: str, data: dict) -> None:
             headers={"Authorization": f"Bearer {_RUNNER_TOKEN}"},
             timeout=5,
         )
-        print(f"[runner] event={event_type} → {_resp.status_code}", file=sys.stderr)
+        if event_type != "heartbeat":
+            print(f"[runner] event={event_type} → {_resp.status_code}", file=sys.stderr)
     except Exception as _exc:
-        print(f"[runner] event={event_type} failed ({url}): {_exc}", file=sys.stderr)
+        if event_type != "heartbeat":
+            print(f"[runner] event={event_type} failed ({url}): {_exc}", file=sys.stderr)
 
 
 # ── SaaS transparent persistence ──────────────────────────────────────────────

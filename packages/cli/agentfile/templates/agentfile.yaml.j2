@@ -5,10 +5,6 @@ schema_version: "1.1"
 governance:
   max_budget_per_run: 1.00
 
-# persistence:
-#   provider: "postgres"
-#   url: "${DATABASE_URL}"
-
 agents:
   {{ key }}:
     metadata:
@@ -49,7 +45,7 @@ agents:
     # skills:
     #   - hub://code-review@1.0.0        # from Skills Hub (version pinned)
     #   - ./skills/my-playbook            # local directory with SKILL.md
-    collaborators: []
+    # collaborators: []
     # transfer_timeout: 300          # seconds before a collaborator transfer times out
     # routing:                       # how to route to collaborators
     #   mode: agent                  # "agent" (LLM decides) | "auto" (cheap router picks)
@@ -93,3 +89,17 @@ agents:
 #           resources:
 #             cpu: 2.0
 #             memory: 4Gi
+
+# Triggers — by default, `ninetrix run` starts an interactive chat in your terminal.
+# Add triggers to change how your agent receives input:
+#
+# triggers:
+#   - type: webhook              # HTTP endpoint — POST /run to invoke
+#     endpoint: /run
+#     port: 9100
+#
+#   - type: channel              # Messaging platform (Telegram, WhatsApp)
+#     channels:
+#       - telegram
+#     session_mode: per_chat
+#     port: 9100
