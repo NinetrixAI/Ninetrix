@@ -50,6 +50,8 @@ except ImportError:
     sys.exit(1)
 
 litellm.drop_params = True  # silently ignore unsupported params per provider
+litellm.suppress_debug_info = True  # hide "Give Feedback" URLs and debug hints
+os.environ.setdefault("LITELLM_LOG", "ERROR")  # suppress info-level litellm logs
 
 _PROVIDER_PREFIX = {
     "anthropic":    "anthropic",
@@ -530,12 +532,25 @@ def main() -> None:
         if SYSTEM_PROMPT:
             _msgs.append({"role": "system", "content": SYSTEM_PROMPT})
         _msgs.append({"role": "user", "content": user_input})
-        response = litellm.completion(
-            model=LITELLM_MODEL,
-            messages=_msgs,
-            max_tokens=MAX_TOKENS,
-            temperature=TEMP,
-        )
+        try:
+            response = litellm.completion(
+                model=LITELLM_MODEL,
+                messages=_msgs,
+                max_tokens=MAX_TOKENS,
+                temperature=TEMP,
+            )
+        except litellm.AuthenticationError:
+            _key_var = _API_KEY_VARS.get(PROVIDER, "API key")
+            print(f"Error: Authentication failed. Check your {_key_var} for provider '{PROVIDER}'.",
+                  file=sys.stderr, flush=True)
+            break
+        except litellm.BadRequestError as _br_err:
+            _err_msg = str(_br_err)
+            _err_msg = re.sub(r"\x1b\[[0-9;]*m", "", _err_msg)
+            _err_msg = re.sub(r"Give Feedback / Get Help.*$", "", _err_msg, flags=re.MULTILINE).strip()
+            _err_msg = re.sub(r"LiteLLM\.Info:.*$", "", _err_msg, flags=re.MULTILINE).strip()
+            print(f"Error: {_err_msg}", file=sys.stderr, flush=True)
+            continue
         _console.print(response.choices[0].message.content or "", markup=False, highlight=False)
 
         print()

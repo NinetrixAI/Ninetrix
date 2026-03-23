@@ -41,14 +41,28 @@ async def _run_turn(
     _scp_in = _scp_out = 0  # per-turn token counts for saas_cp telemetry
     for _turn in range(MAX_TURNS):
         await _rate_limit_wait()
-        response = await litellm.acompletion(
-            model=LITELLM_MODEL,
-            messages=_trim_messages(messages),
-            tools=tool_definitions or None,
-            max_tokens=MAX_TOKENS,
-            temperature=TEMP,
-            num_retries=3,
-        )
+        try:
+            response = await litellm.acompletion(
+                model=LITELLM_MODEL,
+                messages=_trim_messages(messages),
+                tools=tool_definitions or None,
+                max_tokens=MAX_TOKENS,
+                temperature=TEMP,
+                num_retries=3,
+            )
+        except litellm.AuthenticationError:
+            _key_var = _API_KEY_VARS.get(PROVIDER, "API key")
+            print(f"Error: Authentication failed. Check your {_key_var} for provider '{PROVIDER}'.",
+                  file=sys.stderr, flush=True)
+            return
+        except litellm.BadRequestError as _br_err:
+            _err_msg = str(_br_err)
+            # Strip ANSI codes and LiteLLM internal noise from the message
+            _err_msg = re.sub(r"\x1b\[[0-9;]*m", "", _err_msg)
+            _err_msg = re.sub(r"Give Feedback / Get Help.*$", "", _err_msg, flags=re.MULTILINE).strip()
+            _err_msg = re.sub(r"LiteLLM\.Info:.*$", "", _err_msg, flags=re.MULTILINE).strip()
+            print(f"Error: {_err_msg}", file=sys.stderr, flush=True)
+            return
 
         choice = response.choices[0]
         msg    = choice.message

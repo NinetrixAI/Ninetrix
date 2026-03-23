@@ -56,6 +56,7 @@ async def ingest_events(
         return {"saved": 0}
 
     now = datetime.now(timezone.utc)
+    saved = 0
 
     try:
         async with db.pool().acquire() as conn:
@@ -76,10 +77,16 @@ async def ingest_events(
                              checkpoint, metadata)
                         VALUES ($1, $2, $3, 0, 'in_progress', '{}',
                                 jsonb_build_object('model', $4::text))
-                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        ON CONFLICT (thread_id, step_index) DO UPDATE SET
+                            trace_id  = EXCLUDED.trace_id,
+                            agent_id  = EXCLUDED.agent_id,
+                            status    = 'in_progress',
+                            metadata  = jsonb_build_object('model', $4::text),
+                            "timestamp" = NOW()
                         """,
                         trace_id, thread_id, agent_id, model,
                     )
+                    saved += 1
                     log.info("thread_started | thread=%s agent=%s", thread_id, agent_id)
 
                 elif event.type == "checkpoint":
@@ -135,6 +142,7 @@ async def ingest_events(
                         trace_id, parent_trace_id, thread_id, agent_id,
                         step_index, status, checkpoint_json, metadata_json,
                     )
+                    saved += 1
                     log.info("checkpoint | thread=%s step=%d status=%s tokens=%d",
                              thread_id, step_index, status, tokens_used)
 
@@ -166,6 +174,7 @@ async def ingest_events(
                         """,
                         thread_id, new_status, metadata_json,
                     )
+                    saved += 1
                     log.info("thread status | thread=%s → %s", thread_id, new_status)
 
                 elif event.type == "thread_budget_exceeded":
@@ -194,6 +203,7 @@ async def ingest_events(
                         """,
                         thread_id, extra_meta,
                     )
+                    saved += 1
                     log.info("thread status | thread=%s → budget_exceeded (cost=$%.4f / $%.2f)",
                              thread_id, run_cost_usd, budget_usd)
 
@@ -226,6 +236,7 @@ async def ingest_events(
                         """,
                         thread_id,
                     )
+                    saved += 1
                     log.info("rate_limited | thread=%s wait=%.1fs limit=%s",
                              thread_id, wait_seconds, rate_limit)
 
@@ -236,6 +247,7 @@ async def ingest_events(
                     pct_used  = data.get("pct_used", 0)
                     run_cost  = data.get("run_cost_usd", 0)
                     budget    = data.get("budget_usd", 0)
+                    saved += 1
                     log.warning("budget_warning | thread=%s pct=%s%% cost=$%.4f budget=$%.2f",
                                 thread_id, pct_used, run_cost, budget)
 
@@ -260,11 +272,18 @@ async def ingest_events(
                             (trace_id, thread_id, agent_id, step_index, status,
                              checkpoint, metadata)
                         VALUES ($1, $2, $3, 0, 'in_progress', $4::jsonb, $5::jsonb)
-                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        ON CONFLICT (thread_id, step_index) DO UPDATE SET
+                            trace_id    = EXCLUDED.trace_id,
+                            agent_id    = EXCLUDED.agent_id,
+                            status      = 'in_progress',
+                            checkpoint  = EXCLUDED.checkpoint,
+                            metadata    = EXCLUDED.metadata,
+                            "timestamp" = NOW()
                         """,
                         trace_id, thread_id, f"workflow:{wf_name}",
                         checkpoint_json, metadata_json,
                     )
+                    saved += 1
                     log.info("workflow_started | thread=%s workflow=%s", thread_id, wf_name)
 
                 elif event.type == "workflow_step_completed":
@@ -288,6 +307,7 @@ async def ingest_events(
                         json.dumps([{"role": "assistant", "content": label}]),
                         json.dumps([{"ts": now.isoformat()}]),
                     )
+                    saved += 1
 
                 elif event.type == "workflow_completed":
                     thread_id  = data.get("thread_id", "")
@@ -310,6 +330,7 @@ async def ingest_events(
                         """,
                         thread_id, new_status, extra_meta,
                     )
+                    saved += 1
                     log.info("workflow_completed | thread=%s terminated=%s", thread_id, terminated)
 
                 # ── Team events ───────────────────────────────────────────────
@@ -335,11 +356,18 @@ async def ingest_events(
                             (trace_id, thread_id, agent_id, step_index, status,
                              checkpoint, metadata)
                         VALUES ($1, $2, $3, 0, 'in_progress', $4::jsonb, $5::jsonb)
-                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        ON CONFLICT (thread_id, step_index) DO UPDATE SET
+                            trace_id    = EXCLUDED.trace_id,
+                            agent_id    = EXCLUDED.agent_id,
+                            status      = 'in_progress',
+                            checkpoint  = EXCLUDED.checkpoint,
+                            metadata    = EXCLUDED.metadata,
+                            "timestamp" = NOW()
                         """,
                         trace_id, thread_id, f"team:{team_name}",
                         checkpoint_json, metadata_json,
                     )
+                    saved += 1
                     log.info("team_started | thread=%s team=%s agents=%s",
                              thread_id, team_name, agent_names)
 
@@ -363,6 +391,7 @@ async def ingest_events(
                                      "content": f"→ Routed to: {routed_to}"}]),
                         json.dumps([{"ts": now.isoformat()}]),
                     )
+                    saved += 1
 
                 elif event.type == "team_completed":
                     thread_id   = data.get("thread_id", "")
@@ -380,6 +409,7 @@ async def ingest_events(
                         thread_id,
                         json.dumps({"tokens_used": tokens_used, "routed_to": routed_to}),
                     )
+                    saved += 1
                     log.info("team_completed | thread=%s routed_to=%s tokens=%d",
                              thread_id, routed_to, tokens_used)
 
@@ -394,6 +424,7 @@ async def ingest_events(
                             """,
                             agent_id,
                         )
+                        saved += 1
 
                 else:
                     # Store unknown events in runner_events for debugging
@@ -409,12 +440,13 @@ async def ingest_events(
                         data.get("agent_id") or None,
                         json.dumps(data),
                     )
+                    saved += 1
 
     except Exception:
         log.exception("ingest_events | unhandled error")
         raise
 
-    return {"saved": len(payload.events)}
+    return {"saved": saved}
 
 
 @router.get("/threads/{thread_id}/latest")

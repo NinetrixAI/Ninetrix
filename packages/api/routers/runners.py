@@ -56,6 +56,7 @@ async def ingest_events(
         return {"saved": 0}
 
     now = datetime.now(timezone.utc)
+    saved = 0
 
     try:
         async with db.pool().acquire() as conn:
@@ -76,10 +77,16 @@ async def ingest_events(
                              checkpoint, metadata)
                         VALUES ($1, $2, $3, 0, 'in_progress', '{}',
                                 jsonb_build_object('model', $4::text))
-                        ON CONFLICT (thread_id, step_index) DO NOTHING
+                        ON CONFLICT (thread_id, step_index) DO UPDATE SET
+                            trace_id  = EXCLUDED.trace_id,
+                            agent_id  = EXCLUDED.agent_id,
+                            status    = 'in_progress',
+                            metadata  = jsonb_build_object('model', $4::text),
+                            "timestamp" = NOW()
                         """,
                         trace_id, thread_id, agent_id, model,
                     )
+                    saved += 1
                     log.info("thread_started | thread=%s agent=%s", thread_id, agent_id)
 
                 elif event.type == "checkpoint":
@@ -123,6 +130,7 @@ async def ingest_events(
                         trace_id, parent_trace_id, thread_id, agent_id,
                         step_index, status, checkpoint_json, metadata_json,
                     )
+                    saved += 1
                     log.info("checkpoint | thread=%s step=%d status=%s tokens=%d",
                              thread_id, step_index, status, tokens_used)
 
@@ -149,6 +157,7 @@ async def ingest_events(
                         """,
                         thread_id, new_status, metadata_json,
                     )
+                    saved += 1
                     log.info("thread status | thread=%s → %s", thread_id, new_status)
 
                 else:
@@ -165,9 +174,10 @@ async def ingest_events(
                         data.get("agent_id") or None,
                         json.dumps(data),
                     )
+                    saved += 1
 
     except Exception:
         log.exception("ingest_events | unhandled error")
         raise
 
-    return {"saved": len(payload.events)}
+    return {"saved": saved}
