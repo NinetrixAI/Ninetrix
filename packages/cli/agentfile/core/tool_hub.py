@@ -51,9 +51,13 @@ class ToolHubEntry:
     # Local @Tool fields
     files: list[str] = field(default_factory=list)
     file_hashes: dict[str, str] = field(default_factory=dict)
-    # Dependencies (pip/apt)
+    # CLI fields (legacy — prefer dependencies block)
+    install: str = ""
+    # Dependencies (declarative — the CLI builds the install commands)
     pip_deps: list[str] = field(default_factory=list)
     apt_deps: list[str] = field(default_factory=list)
+    npm_deps: list[str] = field(default_factory=list)
+    apt_repo: dict = field(default_factory=dict)  # {keyring_url, repo}
     # Companion skills (oven + baker pattern)
     skill_set: list[str] = field(default_factory=list)
     # Credentials
@@ -128,6 +132,12 @@ class ToolHubEntry:
             return f"- name: {self.name}\n  source: openapi://{self.spec_url}"
         elif self.source_type == "plugin":
             return f"- name: {self.name}\n  source: {self.name}://default"
+        elif self.source_type == "cli":
+            lines = [f"- name: {self.name}", "  source: builtin://bash"]
+            if self.install:
+                lines.append(f"  dependencies:")
+                lines.append(f"    install: \"{self.install[:60]}...\"")
+            return "\n".join(lines)
         elif self.source_type == "local":
             lines = [f"- name: {self.name}"]
             lines.append(f"  source: ./tools/{self.files[0]}" if self.files else f"  source: ./tools/{self.name}.py")
@@ -261,10 +271,13 @@ def _entry_from_raw(name: str, raw: dict) -> ToolHubEntry:
         spec_url=source.get("spec_url", ""),
         base_url=source.get("base_url", ""),
         pip_package=source.get("pip_package", ""),
+        install=source.get("install", ""),
         files=source.get("files", []),
         file_hashes=ver_entry.get("file_hashes", {}),
         pip_deps=deps.get("pip", []),
         apt_deps=deps.get("apt", []),
+        npm_deps=deps.get("npm", []),
+        apt_repo=deps.get("apt_repo", {}),
         credentials=raw.get("credentials", {}),
         credential_aliases=raw.get("credential_aliases", {}),
         skill_set=raw.get("skill_set", []),

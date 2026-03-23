@@ -4,16 +4,6 @@ schema_version: "1.1"
 
 governance:
   max_budget_per_run: 1.00
-  human_approval:
-    enabled: true
-    actions:
-      - file_write
-      - shell_exec
-  rate_limit: 10_requests_per_minute
-
-triggers:
-  - type: webhook
-    endpoint: /run
 
 # persistence:
 #   provider: "postgres"

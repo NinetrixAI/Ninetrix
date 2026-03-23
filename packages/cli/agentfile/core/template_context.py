@@ -425,9 +425,20 @@ def build_context(
     has_output_type = agent_def.output_type is not None
     output_type_schema = _json.dumps(agent_def.output_type) if has_output_type else ""
 
+    # ── Resolve hub:// tools (fetch install/deps from Tool Hub) ─────────────────
+    from agentfile.core.tool_hub import get as _hub_get
+    for _t in agent_def.tools:
+        if _t.is_hub() and _t.hub_name:
+            _hub_entry = _hub_get(_t.hub_name)
+            if _hub_entry and _hub_entry.install:
+                print(f"  ℹ  hub://{_t.hub_name} → CLI install resolved from Tool Hub", file=sys.stderr)
+
     # ── Collected dependencies (data-driven Dockerfile) ───────────────────────
     _collected_pip: set[str] = set()
     _collected_apt: set[str] = set()
+    _collected_npm: set[str] = set()
+    _collected_apt_repos: list[dict] = []  # [{keyring_url, repo}]
+    _collected_install: list[str] = []  # legacy raw install commands
     for _t in agent_def.tools:
         if _t.is_composio():
             _collected_pip.add("composio")
@@ -436,6 +447,22 @@ def build_context(
         if hasattr(_t, 'dependencies') and _t.dependencies:
             _collected_pip.update(_t.dependencies.pip)
             _collected_apt.update(_t.dependencies.apt)
+            if _t.dependencies.install:
+                _collected_install.append(_t.dependencies.install)
+        # Resolve hub:// tools — pull deps from Tool Hub registry
+        if _t.is_hub() and _t.hub_name:
+            _hub_entry = _hub_get(_t.hub_name)
+            if _hub_entry:
+                if _hub_entry.pip_deps:
+                    _collected_pip.update(_hub_entry.pip_deps)
+                if _hub_entry.apt_deps:
+                    _collected_apt.update(_hub_entry.apt_deps)
+                if _hub_entry.npm_deps:
+                    _collected_npm.update(_hub_entry.npm_deps)
+                if _hub_entry.apt_repo and _hub_entry.apt_repo.get("repo"):
+                    _collected_apt_repos.append(_hub_entry.apt_repo)
+                if _hub_entry.install:
+                    _collected_install.append(_hub_entry.install)
     # Feature-level deps
     if has_any_triggers or is_multi_agent or has_invoke_server:
         _collected_pip.update(["fastapi>=0.104", "uvicorn[standard]>=0.24"])
@@ -456,9 +483,17 @@ def build_context(
         else:
             _collected_apt.add(_p)
 
+    # Also collect npm from user packages
+    for _p in agent_def.packages:
+        if _p.startswith("npm:"):
+            _collected_npm.add(_p[4:])
+
     collected_deps = {
         "pip": sorted(_collected_pip),
         "apt": sorted(_collected_apt),
+        "npm": sorted(_collected_npm),
+        "apt_repos": _collected_apt_repos,
+        "install": _collected_install,
     }
     tool_schemes = {_t.scheme for _t in agent_def.tools if hasattr(_t, 'scheme')}
 

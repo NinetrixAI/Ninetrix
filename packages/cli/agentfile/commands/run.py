@@ -478,6 +478,27 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     # Inject credentials from Integration Hub (silent no-op if API not running)
     _inject_integration_credentials(env)
 
+    # Forward tool credentials from host env based on Tool Hub metadata.
+    # For each tool in the agentfile, look up its credentials in the hub
+    # and forward the matching env vars (+ aliases) into the container.
+    from agentfile.core.tool_hub import get as _hub_get
+    for _t in agent.tools:
+        # For hub:// tools, look up by hub_name; otherwise by tool name
+        _lookup = _t.hub_name if _t.is_hub() else _t.name
+        _hub_entry = _hub_get(_lookup) if _lookup else None
+        if _hub_entry:
+            # Forward required credential env vars
+            for _cred_var in _hub_entry.credentials:
+                _val = os.environ.get(_cred_var) or _load_dotenv_key(_cred_var)
+                if _val:
+                    env.setdefault(_cred_var, _val)
+            # Forward aliases (e.g. GITHUB_TOKEN → GH_TOKEN)
+            for _alias, _canonical in _hub_entry.credential_aliases.items():
+                _val = os.environ.get(_alias) or _load_dotenv_key(_alias)
+                if _val:
+                    env.setdefault(_canonical, _val)
+                    env.setdefault(_alias, _val)
+
     # Forward any AGENTFILE_* runtime overrides from the host env (don't overwrite
     # values already set above — e.g. AGENTFILE_PROVIDER always comes from the yaml).
     for _k, _v in os.environ.items():

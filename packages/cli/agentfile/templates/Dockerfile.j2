@@ -9,23 +9,39 @@ LABEL org.opencontainers.image.description="{{ agent.description }}"
 LABEL org.opencontainers.image.source="https://github.com/ninetrix/ninetrix"
 
 WORKDIR /app
+{% if collected_deps.apt_repos %}
+
+# Add custom APT repositories (from Tool Hub)
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg{% for _repo in collected_deps.apt_repos %} \
+    && curl -fsSL {{ _repo.keyring_url }} -o /usr/share/keyrings/{{ _repo.keyring_url.split('/')[-1] }} \
+    && echo '{{ _repo.repo }}' > /etc/apt/sources.list.d/{{ _repo.repo.split('/')[-2] }}.list{% endfor %} \
+    && apt-get update
+{% endif %}
 {% if collected_deps.apt or has_apt_packages %}
 
-# System packages (apt) — cache mounts survive across builds
+# System packages (apt)
 RUN --mount=type=cache,target=/var/cache/apt \
     --mount=type=cache,target=/var/lib/apt/lists \
     apt-get update && apt-get install -y --no-install-recommends{% for _p in collected_deps.apt %} {{ _p }}{% endfor %}{% for _p in apt_packages %} {{ _p }}{% endfor %}
 
 {% endif %}
-{% if has_npm_packages %}
+{% if collected_deps.npm or has_npm_packages %}
 
-# npm packages — cache mount reuses downloaded packages
-RUN --mount=type=cache,target=/root/.npm \
-    npm install -g {{ npm_packages | join(' ') }}
+# Install Node.js + npm packages
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g{% for _p in collected_deps.npm %} {{ _p }}{% endfor %}{% for _p in npm_packages %} {{ _p }}{% endfor %}
+
 {% endif %}
+{% for _cmd in collected_deps.install %}
+
+# CLI tool install (legacy)
+RUN {{ _cmd }}
+{% endfor %}
 
 # Install Python runtime dependencies + ninetrix-sdk
-# litellm pin: review quarterly — litellm has a history of breaking changes
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
     "litellm>=1.50,<2.0" \

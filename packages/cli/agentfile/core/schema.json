@@ -181,46 +181,49 @@
             "type": "array",
             "description": "Tools the agent can call. Required unless builtin: true is set.",
             "items": {
-              "type": "object",
-              "required": ["name", "source"],
-              "additionalProperties": false,
-              "properties": {
-                "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
-                "source": {
-                  "type": "string",
-                  "pattern": "^([a-z][a-z0-9_]*://|\\./|/).+",
-                  "description": "Tool source URI. Built-in schemes: builtin://, mcp://, composio://, openapi://. Local files: ./path/to/tools.py. Extensible via community plugins."
-                },
-                "actions": {
-                  "type": "array",
-                  "items": { "type": "string", "minLength": 1 },
-                  "description": "Filter to specific operations/actions to expose. For Composio: action slugs (e.g. GMAIL_SEND_EMAIL). For OpenAPI: operationIds."
-                },
-                "auth": {
+              "oneOf": [
+                { "type": "string", "pattern": "^hub://", "description": "Hub tool shorthand: hub://gh or hub://gh@1.0.0" },
+                {
                   "type": "object",
-                  "description": "Authentication config for this tool source.",
+                  "required": ["name", "source"],
+                  "additionalProperties": false,
                   "properties": {
-                    "type":        { "type": "string", "enum": ["bearer", "basic", "header", "api_key_query"], "description": "Auth scheme type." },
-                    "token":       { "type": "string", "description": "Token or API key. Supports ${ENV_VAR} syntax." },
-                    "header_name": { "type": "string", "description": "Custom header name (for type=header)." },
-                    "username":    { "type": "string", "description": "Username (for type=basic). Supports ${ENV_VAR}." },
-                    "password":    { "type": "string", "description": "Password (for type=basic). Supports ${ENV_VAR}." },
-                    "query_param": { "type": "string", "description": "Query parameter name (for type=api_key_query)." }
+                    "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
+                    "source": {
+                      "type": "string",
+                      "pattern": "^([a-z][a-z0-9_]*://|\\./|/).+",
+                      "description": "Tool source URI. Built-in schemes: builtin://, mcp://, composio://, openapi://. Local files: ./path/to/tools.py. Extensible via community plugins."
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 },
+                      "description": "Filter to specific operations/actions to expose."
+                    },
+                    "auth": {
+                      "type": "object",
+                      "description": "Authentication config for this tool source.",
+                      "properties": {
+                        "type":        { "type": "string", "enum": ["bearer", "basic", "header", "api_key_query"] },
+                        "token":       { "type": "string" },
+                        "header_name": { "type": "string" },
+                        "username":    { "type": "string" },
+                        "password":    { "type": "string" },
+                        "query_param": { "type": "string" }
+                      }
+                    },
+                    "dependencies": {
+                      "type": "object",
+                      "description": "Extra packages or install commands for this tool.",
+                      "properties": {
+                        "pip": { "type": "array", "items": { "type": "string" } },
+                        "apt": { "type": "array", "items": { "type": "string" } },
+                        "install": { "type": "string", "description": "Shell command to install a CLI tool (from Tool Hub)." }
+                      }
+                    },
+                    "base_url": { "type": "string", "description": "Override the base URL for OpenAPI sources." }
                   }
-                },
-                "dependencies": {
-                  "type": "object",
-                  "description": "Extra packages to install for this tool source.",
-                  "properties": {
-                    "pip": { "type": "array", "items": { "type": "string" }, "description": "pip packages to install." },
-                    "apt": { "type": "array", "items": { "type": "string" }, "description": "apt packages to install." }
-                  }
-                },
-                "base_url": {
-                  "type": "string",
-                  "description": "Override the base URL for OpenAPI sources."
                 }
-              }
+              ]
             }
           },
 

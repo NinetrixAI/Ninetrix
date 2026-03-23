@@ -36,6 +36,7 @@ from agentfile.commands.migrate import migrate_cmd
 from agentfile.commands.schema import schema_cmd
 from agentfile.commands.channel import channel_cmd
 from agentfile.commands.tools import tools_cmd
+from agentfile.commands.hub import hub_cmd
 
 console = Console()
 
@@ -157,6 +158,7 @@ cli.add_command(migrate_cmd,     name="migrate")
 cli.add_command(schema_cmd,      name="schema")
 cli.add_command(channel_cmd,     name="channel")
 cli.add_command(tools_cmd,       name="tools")
+cli.add_command(hub_cmd,         name="hub")
 
 
 def main() -> None:

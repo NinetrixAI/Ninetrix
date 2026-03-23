@@ -73,6 +73,7 @@ class ToolDependencies(BaseModel):
 
     pip: list[str] = Field(default_factory=list)
     apt: list[str] = Field(default_factory=list)
+    install: str = ""  # raw shell command to install a CLI tool (from Tool Hub)
 
 
 class Tool(BaseModel):
@@ -115,6 +116,16 @@ class Tool(BaseModel):
 
     def is_openapi(self) -> bool:
         return self.scheme == "openapi"
+
+    def is_hub(self) -> bool:
+        return self.scheme == "hub"
+
+    @property
+    def hub_name(self) -> str | None:
+        """Extract tool name from 'hub://gh' or 'hub://gh@1.0.0'."""
+        if not self.is_hub():
+            return None
+        return self.source_path.split("@")[0]
 
     @property
     def builtin_name(self) -> Optional[str]:
@@ -412,7 +423,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         tool_timeout=int(runtime.get("tool_timeout", 30)),
         history_window_tokens=int(runtime.get("history_window_tokens", 90_000)),
         output_type=araw.get("output_type"),
-        tools=[Tool(**t) for t in (araw.get("tools") or [])],
+        tools=[Tool(**t) if isinstance(t, dict) else Tool(name=t.split("://")[-1].split("@")[0], source=t) for t in (araw.get("tools") or [])],
         skills=[Skill(**s) if isinstance(s, dict) else Skill(source=s) for s in (araw.get("skills") or [])],
         governance=_parse_governance(araw["governance"]) if araw.get("governance") else None,
         triggers=[Trigger(**t) for t in (araw.get("triggers") or [])],
@@ -675,6 +686,10 @@ class AgentFile(BaseModel):
                     errors.append(
                         f"{prefix}.tools[{i}].source: unknown builtin '{tool.builtin_name}' — "
                         f"valid options: {', '.join(sorted(_known_builtins))}"
+                    )
+                if tool.is_hub() and not tool.hub_name:
+                    errors.append(
+                        f"{prefix}.tools[{i}].source: hub:// tool missing name (e.g. hub://gh)"
                     )
 
             for i, skill in enumerate(agent.skills):

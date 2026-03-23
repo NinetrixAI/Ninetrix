@@ -170,7 +170,7 @@ def add_cmd(name: str, agentfile_path: str, write: bool) -> None:
             console.print(f"\n  [dim]Or run: ninetrix tools add {name} --write[/dim]\n")
         return
 
-    # Non-local tools (mcp, openapi, plugin)
+    # Non-local tools (mcp, openapi, plugin, cli)
     if write:
         _write_tool_to_agentfile(entry, agentfile_path)
     else:
@@ -184,6 +184,17 @@ def add_cmd(name: str, agentfile_path: str, write: bool) -> None:
             label = entry.required_env.get(var, "")
             console.print(f"  [yellow]⚠[/yellow]  Set [bold]{var}[/bold] in your .env file{f' — {label}' if label else ''}")
         console.print()
+
+    # Suggest companion skills (oven + baker)
+    if entry.skill_set and write:
+        console.print(f"  [dim]This tool has companion skills:[/dim]")
+        for s in entry.skill_set:
+            console.print(f"    [green]→[/green] {s}")
+        if click.confirm("\n  Also add the companion skill(s)?", default=True):
+            from agentfile.commands.hub import _add_skill_ref
+            for skill_ref in entry.skill_set:
+                _add_skill_ref(skill_ref, agentfile_path)
+            console.print()
 
 
 @tools_cmd.command("inspect")
@@ -292,8 +303,14 @@ def _write_tool_to_agentfile(entry, agentfile_path: str) -> None:
             if entry.apt_deps:
                 deps["apt"] = entry.apt_deps
             new_tool["dependencies"] = deps
+    elif entry.source_type == "cli":
+        new_tool["source"] = "builtin://bash"
+        if entry.install:
+            new_tool["dependencies"] = {"install": entry.install}
     elif entry.source_type == "plugin":
         new_tool["source"] = f"{entry.name}://default"
+    else:
+        new_tool["source"] = f"mcp://{entry.name}"
     tools_list.append(new_tool)
 
     path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
