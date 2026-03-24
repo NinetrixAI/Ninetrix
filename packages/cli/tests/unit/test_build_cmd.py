@@ -252,18 +252,14 @@ class TestBuildOne:
     @patch("shutil.copy")
     def test_returns_success_tuple(self, mock_copy, mock_render, valid_yaml: Path):
         """_build_one returns (True, full_tag, log_lines) on success."""
-
-        mock_client = MagicMock()
-        mock_img = MagicMock()
-        mock_client.images.build.return_value = (
-            mock_img,
-            [{"stream": "Step 1/3\n"}, {"stream": "Step 2/3\n"}],
-        )
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "Step 1/3\nStep 2/3\n"
 
         af = AgentFile.from_path(valid_yaml)
         agent = af.entry_agent
 
-        with patch("docker.from_env", return_value=mock_client):
+        with patch("subprocess.run", return_value=mock_proc):
             from agentfile.commands.build import _build_one
 
             ok, tag, lines = _build_one("my-agent", agent, af, str(valid_yaml), "latest")
@@ -278,16 +274,15 @@ class TestBuildOne:
     def test_returns_failure_tuple_on_docker_error(
         self, mock_copy, mock_render, valid_yaml: Path
     ):
-        """_build_one returns (False, tag, [error_msg]) on DockerException."""
-        from docker.errors import DockerException
-
-        mock_client = MagicMock()
-        mock_client.images.build.side_effect = DockerException("build failed badly")
+        """_build_one returns (False, tag, [error_msg]) on build failure."""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stdout = "build failed badly"
 
         af = AgentFile.from_path(valid_yaml)
         agent = af.entry_agent
 
-        with patch("docker.from_env", return_value=mock_client):
+        with patch("subprocess.run", return_value=mock_proc):
             from agentfile.commands.build import _build_one
 
             ok, tag, lines = _build_one("my-agent", agent, af, str(valid_yaml), "latest")

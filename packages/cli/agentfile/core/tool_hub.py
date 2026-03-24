@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -135,7 +134,7 @@ class ToolHubEntry:
         elif self.source_type == "cli":
             lines = [f"- name: {self.name}", "  source: builtin://bash"]
             if self.install:
-                lines.append(f"  dependencies:")
+                lines.append("  dependencies:")
                 lines.append(f"    install: \"{self.install[:60]}...\"")
             return "\n".join(lines)
         elif self.source_type == "local":
