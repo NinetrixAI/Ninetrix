@@ -40,7 +40,6 @@ TEMP       = float(os.environ.get("AGENTFILE_TEMPERATURE", "{{ agent.temperature
 MAX_TOKENS          = int(os.environ.get("AGENTFILE_MAX_TOKENS",          "{{ max_tokens }}"))
 MAX_TURNS           = int(os.environ.get("AGENTFILE_MAX_TURNS",           "{{ max_turns }}"))
 TOOL_TIMEOUT        = int(os.environ.get("AGENTFILE_TOOL_TIMEOUT",        "{{ tool_timeout }}"))
-MCP_INIT_TIMEOUT    = 60     # seconds to wait for each MCP server to initialize at startup
 HISTORY_WINDOW_TOKENS = int(os.environ.get("AGENTFILE_HISTORY_WINDOW_TOKENS", "{{ history_window_tokens }}"))
 
 try:

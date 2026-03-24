@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Optional
 
 from mcp import ClientSession, StdioServerParameters
@@ -83,9 +84,10 @@ class MCPServer:
         if self.session is None:
             raise RuntimeError(f"Server {self.name!r} is not started")
 
+        _timeout = float(os.environ.get("MCP_TOOL_TIMEOUT", "30"))
         result = await asyncio.wait_for(
             self.session.call_tool(tool_name, args),
-            timeout=30.0,
+            timeout=_timeout,
         )
 
         content = []

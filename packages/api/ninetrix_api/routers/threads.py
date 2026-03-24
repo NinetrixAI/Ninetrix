@@ -514,6 +514,10 @@ async def get_timeline(thread_id: str):
                 prev_meta = meta
         agent_prev_meta[row["agent_id"]] = prev_meta
 
+    # Sort chronologically; stable sort preserves within-timestamp order
+    # (e.g. assistant_message before its tool_call when both share the same ts)
+    events.sort(key=lambda e: e.get("ts", ""))
+
     return events
 
 
@@ -593,6 +597,8 @@ async def stream_thread(thread_id: str, request: Request):
                     if meta.get("ts"):
                         prev_meta = meta
                 agent_prev_meta[row["agent_id"]] = prev_meta
+
+            new_events.sort(key=lambda e: e.get("ts", ""))
 
             if new_events or current_status != last_status:
                 payload = json.dumps({

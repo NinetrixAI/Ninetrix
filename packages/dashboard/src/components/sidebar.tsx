@@ -268,8 +268,7 @@ export default function Sidebar({ agents, channels, apiStatus, autoRefresh, onTo
         {/* Navigation */}
         <nav className="flex flex-col gap-0.5" style={{ padding: "12px 12px" }}>
           {NAV_ITEMS.map((item) => {
-            const fullHref = `${BASE_PATH}${item.href}`;
-            const active = pathname === fullHref || pathname.startsWith(fullHref + "/");
+            const active = pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;
             return (
               <Link

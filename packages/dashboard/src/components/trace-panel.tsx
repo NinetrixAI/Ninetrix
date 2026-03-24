@@ -28,11 +28,19 @@ const NODE_COLORS: Record<string, { dot: string; bar: string; label: string }> =
   handoff:  { dot: "#A78BFA", bar: "rgba(167,139,250,0.25)", label: "handoff" },
 };
 
-function nodeLabel(n: TraceNode): string {
-  const c = NODE_COLORS[n.type] ?? NODE_COLORS.tool;
-  if (n.type === "llm") return `${c.label} \u00b7 ${n.model ?? n.label}`;
-  if (n.type === "handoff") return `${c.label} \u00b7 ${n.handoffContent?.targetAgent ?? n.label}`;
-  return `${c.label} \u00b7 ${n.label}`;
+function nodeParts(n: TraceNode): { primary: string; secondary: string | null } {
+  if (n.type === "llm") {
+    const model = n.model?.replace(/^.*\//, "") ?? null; // strip provider prefix
+    return { primary: n.agentId, secondary: model };
+  }
+  if (n.type === "handoff") {
+    return { primary: n.handoffContent?.targetAgent ?? n.label, secondary: null };
+  }
+  if (n.type === "thinking") {
+    return { primary: "Reasoning", secondary: null };
+  }
+  // tool
+  return { primary: n.label, secondary: n.agentId };
 }
 
 function DurationBadge({ ms, status }: { ms: number | null; status: string }) {
@@ -447,15 +455,21 @@ export default function TracePanel({ nodes, threadId, agentId }: TracePanelProps
                     >
                       <NodeIcon type={node.type} size={14} color={node.status === "error" ? "var(--red)" : c.dot} />
                     </span>
-                    <span
-                      className="truncate"
-                      style={{
-                        color: isSelected ? "var(--text)" : "var(--text-secondary)",
-                        letterSpacing: "-0.01em",
-                      }}
-                    >
-                      {nodeLabel(node)}
-                    </span>
+                    {(() => {
+                      const parts = nodeParts(node);
+                      return (
+                        <span className="truncate" style={{ letterSpacing: "-0.01em" }}>
+                          <span style={{ color: isSelected ? "var(--text)" : "var(--text-secondary)" }}>
+                            {parts.primary}
+                          </span>
+                          {parts.secondary && (
+                            <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>
+                              {" \u00b7 "}{parts.secondary}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div className="flex items-center gap-2 shrink-0 ml-3">
                     {tokens > 0 && (

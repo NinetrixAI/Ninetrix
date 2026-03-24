@@ -236,9 +236,9 @@ def mcp_status() -> None:
     console.print()
 
     if any_issue:
-        console.print("  [yellow]Some local servers have issues.[/yellow]")
-        console.print("  Run [bold]ninetrix mcp add <server>[/bold] to fix missing servers.")
-        console.print("  Run [bold]ninetrix gateway doctor[/bold] for a full diagnostic.\n")
+        console.print("  [yellow]Some local servers failed to start.[/yellow]")
+        console.print("  Check worker logs:  [bold]ninetrix mcp logs[/bold]")
+        console.print("  Full diagnostic:    [bold]ninetrix gateway doctor[/bold]\n")
     elif rows:
         console.print(f"  [dim]Worker config:[/dim] {worker_config.find_config_path()}\n")
 
@@ -910,6 +910,32 @@ def mcp_restart() -> None:
             "  [green]✓[/green] Worker restarting.\n"
             "  Run [bold]ninetrix mcp status[/bold] in a few seconds to verify.\n"
         )
+
+
+@mcp_cmd.command("logs")
+@click.option("--follow", "-f", is_flag=True, help="Stream logs continuously")
+@click.option("--tail", "-n", default=50, help="Number of lines to show (default: 50)")
+def mcp_logs(follow: bool, tail: int) -> None:
+    """Stream mcp-worker container logs."""
+    import subprocess
+
+    from agentfile.commands.gateway import _find_compose_file, _find_dev_compose_file
+
+    compose_file = _find_dev_compose_file() or _find_compose_file()
+    if not compose_file:
+        console.print(
+            "  [red]✗[/red] No running gateway found.\n"
+            "  Start with: [bold]ninetrix dev --mcp[/bold]\n"
+        )
+        raise SystemExit(1)
+
+    cmd = ["docker", "compose", "-f", compose_file, "logs", "mcp-worker", f"--tail={tail}"]
+    if follow:
+        cmd.append("--follow")
+    try:
+        subprocess.run(cmd, check=False)
+    except KeyboardInterrupt:
+        pass
 
 
 # ── .env helpers ───────────────────────────────────────────────────────────────

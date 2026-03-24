@@ -36,13 +36,15 @@ async def handle_mcp(
     effective = await verify_token(authorization)
 
     body = await request.json()
+    # Propagate request ID from agent for tracing
+    req_trace_id = request.headers.get("x-request-id", "")
 
     if isinstance(body, list):
-        return [await _handle_single(effective, item) for item in body]
-    return await _handle_single(effective, body)
+        return [await _handle_single(effective, item, req_trace_id) for item in body]
+    return await _handle_single(effective, body, req_trace_id)
 
 
-async def _handle_single(org_id: str, body: dict) -> dict:
+async def _handle_single(org_id: str, body: dict, trace_id: str = "") -> dict:
     req_id = body.get("id")
     method = body.get("method", "")
     params = body.get("params", {})
@@ -78,9 +80,10 @@ async def _handle_single(org_id: str, body: dict) -> dict:
                 return _error(req_id, _TOOL_NOT_FOUND, f"Tool not found: {tool_name}")
 
             conn, server_name, local_tool_name = entry
-            logger.debug(
-                "Routing %s → worker=%s server=%s tool=%s org=%s",
-                tool_name, conn.worker_id, server_name, local_tool_name, org_id,
+            _trace = f"[req:{trace_id}] " if trace_id else ""
+            logger.info(
+                "%sRouting %s → worker=%s server=%s tool=%s org=%s",
+                _trace, tool_name, conn.worker_id, server_name, local_tool_name, org_id,
             )
             result = await registry.send_call(conn, server_name, local_tool_name, args)
 

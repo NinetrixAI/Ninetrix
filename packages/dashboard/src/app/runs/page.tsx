@@ -331,54 +331,20 @@ export default function RunsPage() {
             </div>
 
             {/* Stats */}
-            <div className="flex items-baseline gap-8">
-              <div className="text-right">
-                <div
-                  style={{
-                    fontSize: 20,
-                    fontWeight: 700,
-                    color: "var(--text)",
-                    letterSpacing: "-0.02em",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  {stats.totalRuns.toLocaleString()}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
-                  Total runs
-                </div>
+            <div className="text-right">
+              <div
+                style={{
+                  fontSize: 20,
+                  fontWeight: 700,
+                  color: "var(--text)",
+                  letterSpacing: "-0.02em",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {stats.totalRuns.toLocaleString()}
               </div>
-              <div className="text-right">
-                <div
-                  style={{
-                    fontSize: 20,
-                    fontWeight: 700,
-                    color: "var(--purple)",
-                    letterSpacing: "-0.02em",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  {stats.successRate}%
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
-                  Success
-                </div>
-              </div>
-              <div className="text-right">
-                <div
-                  style={{
-                    fontSize: 20,
-                    fontWeight: 700,
-                    color: "var(--text)",
-                    letterSpacing: "-0.02em",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                >
-                  {formatCost(stats.avgCost)}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
-                  Avg cost
-                </div>
+              <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1 }}>
+                Total runs
               </div>
             </div>
           </div>
@@ -586,8 +552,26 @@ export default function RunsPage() {
                               fontWeight: 450,
                             }}
                           >
-                            {t.agent_name || t.agent_id}
+                            {t.agents.length > 0 ? t.agents[0] : (t.agent_name || t.agent_id)}
                           </span>
+                          {t.agents.length > 1 && (
+                            <span
+                              title={t.agents.slice(1).join(", ")}
+                              style={{
+                                marginLeft: 6,
+                                padding: "1px 6px",
+                                borderRadius: 4,
+                                background: "var(--purple-dim)",
+                                color: "var(--purple)",
+                                fontSize: 11,
+                                fontWeight: 500,
+                                fontFamily: "var(--font-mono)",
+                                cursor: "default",
+                              }}
+                            >
+                              +{t.agents.length - 1}
+                            </span>
+                          )}
                         </td>
 
                         {/* Status */}

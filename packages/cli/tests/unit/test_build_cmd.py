@@ -277,7 +277,7 @@ class TestBuildOne:
         """_build_one returns (False, tag, [error_msg]) on build failure."""
         mock_proc = MagicMock()
         mock_proc.returncode = 1
-        mock_proc.stdout = "build failed badly"
+        mock_proc.stdout = "ERROR: build failed badly"
 
         af = AgentFile.from_path(valid_yaml)
         agent = af.entry_agent

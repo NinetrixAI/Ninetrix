@@ -204,7 +204,7 @@ async def _run_turn(
                     )
                     result_str = _extract_text(result.content)
                 except asyncio.TimeoutError:
-                    result_str = f"Tool '{fn_name}' timed out after {TOOL_TIMEOUT}s."
+                    result_str = f"Tool '{fn_name}' timed out after {TOOL_TIMEOUT}s. Increase with AGENTFILE_TOOL_TIMEOUT={TOOL_TIMEOUT + 30}"
                     print(f"[tool] ✗ {fn_name}: timed out after {TOOL_TIMEOUT}s",
                           file=sys.stderr, flush=True)
                 except BaseException as exc:
@@ -297,10 +297,11 @@ async def _run_turn(
             if not result_str.isascii():
                 result_str = result_str.encode("ascii", "backslashreplace").decode("ascii")
             _result_preview = result_str[:300].replace("\n", " ")
+            _dur_str = f"{_tool_dur_ms}ms" if _tool_dur_ms < 1000 else f"{_tool_dur_ms / 1000:.1f}s"
             if result_str.startswith("Tool error:") or result_str.startswith("Error:"):
-                print(f"[tool] ✗ {fn_name}: {_result_preview}", file=sys.stderr, flush=True)
+                print(f"[tool] ✗ {fn_name} ({_dur_str}): {_result_preview}", file=sys.stderr, flush=True)
             else:
-                print(f"[tool] ← {fn_name}: {_result_preview}", flush=True)
+                print(f"[tool] ← {fn_name} ({_dur_str}): {_result_preview}", flush=True)
             _tool_result: dict = {"role": "tool", "tool_call_id": tc.id, "content": result_str}
             messages.append(_tool_result)
             if saas_cp is not None:

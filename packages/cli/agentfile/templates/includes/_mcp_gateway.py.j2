@@ -17,45 +17,70 @@ class _MCPGatewaySession:
         self._http = http
 
     async def call_tool(self, name: str, args: dict):
+        _req_id = str(uuid.uuid4())[:8]
         payload = {
-            "jsonrpc": "2.0", "id": 1,
+            "jsonrpc": "2.0", "id": _req_id,
             "method": "tools/call",
             "params": {"name": name, "arguments": args},
         }
-        resp = await self._http.post(_GW_ENDPOINT, json=payload, headers=_GW_HEADERS)
+        try:
+            resp = await self._http.post(_GW_ENDPOINT, json=payload, headers=_GW_HEADERS)
+        except Exception as _conn_exc:
+            _t = type(_conn_exc).__name__
+            if "ConnectError" in _t or "ConnectionRefused" in _t:
+                raise RuntimeError(
+                    f"Gateway unreachable at {_MCP_GATEWAY_URL}. Is it running? "
+                    f"Check: ninetrix mcp status"
+                )
+            raise RuntimeError(f"Gateway connection error: {_t}: {_conn_exc}")
+        if resp.status_code in (401, 403):
+            raise RuntimeError("Authentication failed. Check MCP_GATEWAY_TOKEN")
         resp.raise_for_status()
         body = resp.json()
         if "error" in body:
             err = body["error"]
-            if err.get("code") == -32010:
+            code = err.get("code", 0)
+            msg = err.get("message", "MCP Gateway error")
+            if code == -32010:
                 data = err.get("data", {})
                 integration_id = data.get("integration_id", "")
                 auth_url = data.get("auth_url", "")
-                print(f"\n\u26a0  Tool '{name}' requires authorization.", file=sys.stderr, flush=True)
+                print(f"\n⚠  Tool '{name}' requires authorization.", file=sys.stderr, flush=True)
                 print(f"   Integration '{integration_id}' is not connected.", file=sys.stderr, flush=True)
                 if auth_url:
                     print(f"\n   Connect now:\n   {auth_url}\n", file=sys.stderr, flush=True)
                     print(f"   Re-run after connecting in the dashboard.\n", file=sys.stderr, flush=True)
                 raise SystemExit(1)
-            raise RuntimeError(err.get("message", "MCP Gateway error"))
+            elif code == -32601:
+                raise RuntimeError(f"Tool '{name}' not found on gateway. Run: ninetrix mcp status")
+            else:
+                raise RuntimeError(f"Tool '{name}' failed: {msg}. Check worker logs: ninetrix mcp logs")
         result = body.get("result", {})
         # Wrap as object with .content so _extract_text() works unchanged
         content = result.get("content") or [{"type": "text", "text": str(result)}]
         return type("_GWResult", (), {"content": content, "isError": result.get("isError", False)})()
 
 
+_MCP_INIT_TIMEOUT = int(os.environ.get("MCP_INIT_TIMEOUT", "60"))
+
+
 async def _init_mcp_gateway(http: httpx.AsyncClient) -> tuple[dict, list]:
     """
     Connect to the MCP Gateway, discover available tools, and return
     (sessions_by_tool, tool_definitions) ready for the LLM API.
+
+    Hard-fails (sys.exit) when the gateway is unreachable — an agent with
+    mcp:// tools cannot function without it.
     """
     if not _MCP_GATEWAY_URL:
         print(
-            "[mcp-gateway] MCP tools require a running gateway. "
-            "Start one with: ninetrix dev --mcp",
+            "[mcp-gateway] ERROR: No MCP gateway URL configured.\n"
+            "  MCP tools require a running gateway.\n"
+            "  Start one with:  ninetrix dev --mcp\n"
+            "  Or set:          MCP_GATEWAY_URL=http://localhost:9090",
             file=sys.stderr, flush=True,
         )
-        return {}, []
+        raise SystemExit(1)
 
     session = _MCPGatewaySession(http)
     try:
@@ -63,19 +88,25 @@ async def _init_mcp_gateway(http: httpx.AsyncClient) -> tuple[dict, list]:
         await asyncio.wait_for(
             http.post(_GW_ENDPOINT, json={"jsonrpc":"2.0","id":0,"method":"initialize","params":{}},
                       headers=_GW_HEADERS),
-            timeout=MCP_INIT_TIMEOUT,
+            timeout=_MCP_INIT_TIMEOUT,
         )
         # Discover tools
         list_resp = await asyncio.wait_for(
             http.post(_GW_ENDPOINT, json={"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}},
                       headers=_GW_HEADERS),
-            timeout=MCP_INIT_TIMEOUT,
+            timeout=_MCP_INIT_TIMEOUT,
         )
         list_resp.raise_for_status()
         body = list_resp.json()
         if "error" in body:
-            print(f"[mcp-gateway] Error from gateway: {body['error']}", file=sys.stderr)
-            return {}, []
+            err = body["error"]
+            code = err.get("code", 0)
+            msg = err.get("message", str(err))
+            if code in (-32010,):
+                print(f"[mcp-gateway] ERROR: Authentication failed — check MCP_GATEWAY_TOKEN", file=sys.stderr)
+            else:
+                print(f"[mcp-gateway] ERROR: Gateway returned error: {msg}", file=sys.stderr)
+            raise SystemExit(1)
 
         tools = body.get("result", {}).get("tools", [])
         sessions_by_tool = {t["name"]: session for t in tools}
@@ -95,13 +126,36 @@ async def _init_mcp_gateway(http: httpx.AsyncClient) -> tuple[dict, list]:
               flush=True)
         return sessions_by_tool, tool_definitions
 
+    except SystemExit:
+        raise
     except asyncio.TimeoutError:
-        print(f"[mcp-gateway] ERROR: timed out connecting to gateway at {_MCP_GATEWAY_URL}",
-              file=sys.stderr, flush=True)
-        return {}, []
+        print(
+            f"[mcp-gateway] ERROR: Timed out connecting to gateway at {_MCP_GATEWAY_URL}\n"
+            f"  Waited {_MCP_INIT_TIMEOUT}s. Is the gateway running?\n"
+            f"  Check with:   ninetrix mcp status\n"
+            f"  Start with:   ninetrix dev --mcp\n"
+            f"  Increase with: MCP_INIT_TIMEOUT=120",
+            file=sys.stderr, flush=True,
+        )
+        raise SystemExit(1)
     except Exception as exc:
-        print(f"[mcp-gateway] ERROR: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-        return {}, []
+        _exc_type = type(exc).__name__
+        if "ConnectionRefused" in _exc_type or "ConnectError" in _exc_type:
+            print(
+                f"[mcp-gateway] ERROR: Gateway unreachable at {_MCP_GATEWAY_URL}\n"
+                f"  Connection refused. Is the gateway running?\n"
+                f"  Check with:  ninetrix mcp status\n"
+                f"  Start with:  ninetrix dev --mcp",
+                file=sys.stderr, flush=True,
+            )
+        else:
+            print(
+                f"[mcp-gateway] ERROR: {_exc_type}: {exc}\n"
+                f"  Could not connect to gateway at {_MCP_GATEWAY_URL}\n"
+                f"  Check worker logs: ninetrix mcp logs",
+                file=sys.stderr, flush=True,
+            )
+        raise SystemExit(1)
 
 
 {% endif %}

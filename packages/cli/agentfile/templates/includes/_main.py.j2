@@ -67,6 +67,7 @@ async def main() -> None:
                             " Re-send your request to continue.\n"
                         )
 
+{% if not is_multi_agent or has_any_triggers %}
     _post_runner_event("thread_started", {
         "thread_id": THREAD_ID or os.urandom(8).hex(),
         "trace_id":  TRACE_ID,
@@ -74,6 +75,7 @@ async def main() -> None:
         "trigger":   "api",
         "model":     LITELLM_MODEL,
     })
+{% endif %}
 
     try:
         async with AsyncExitStack() as stack:
