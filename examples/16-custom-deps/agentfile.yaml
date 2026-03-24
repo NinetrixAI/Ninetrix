@@ -34,6 +34,5 @@ agents:
             - tesseract-ocr
             - tesseract-ocr-eng
 
-      # Builtin shell for file operations
-      - name: shell
-        source: builtin://bash
+      # Built-in shell for file operations
+      - bash

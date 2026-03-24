@@ -30,10 +30,8 @@ agents:
       max_turns: 30
 
     tools:
-      - name: shell
-        source: builtin://shell
-      - name: filesystem
-        source: builtin://filesystem
+      - bash
+      - filesystem
   
     governance:
       max_budget_per_run: 2.00

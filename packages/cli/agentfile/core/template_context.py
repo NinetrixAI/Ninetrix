@@ -369,8 +369,8 @@ def build_context(
     if "shell" in _builtin_names:
         _builtin_names.discard("shell")
         _builtin_names.add("bash")
-    # builtin: true → enable all
-    if getattr(agent_def, "builtin", False):
+    # tools: all → enable all
+    if getattr(agent_def, "tools_all", False):
         _builtin_names = set(_ALL_BUILTIN_NAMES)
     has_builtin_bash = "bash" in _builtin_names
     has_builtin_filesystem = "filesystem" in _builtin_names

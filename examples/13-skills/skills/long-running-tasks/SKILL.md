@@ -5,7 +5,7 @@ description: Never block the agent loop — use background execution for slow co
 author: ninetrix
 tags: [development, operations, performance]
 requires:
-  tools: [builtin://shell, builtin://process_manager]
+  tools: [bash, process_manager]
 ---
 
 # Long-Running Tasks

@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
-# Example: Agent with all 14 builtin tools — full Claude Code-level capabilities
+# Example: Agent with all built-in tools — full Claude Code-level capabilities
 schema_version: "1.1"
 
 governance:
@@ -45,41 +45,10 @@ agents:
       max_turns: 30
       tool_timeout: 60
 
-    tools:
-      # ── Filesystem ──────────────────────────────────────────
-      - name: filesystem
-        source: builtin://filesystem        # read_file, write_file, list_dir
-      - name: edit_file
-        source: builtin://edit_file          # find-and-replace in files
-      - name: glob
-        source: builtin://glob               # find files by pattern (**/*.py)
-      - name: search_in_files
-        source: builtin://search_in_files    # regex search across files (grep)
-      - name: diff
-        source: builtin://diff               # unified diff between files
-
-      # ── Execution ───────────────────────────────────────────
-      - name: shell
-        source: builtin://shell              # run any shell command
-      - name: python_eval
-        source: builtin://python_eval        # execute Python snippets
-      - name: process_manager
-        source: builtin://process_manager    # start/stop background processes
-
-      # ── Web ─────────────────────────────────────────────────
-      - name: web_search
-        source: builtin://web_search         # search the web (Anthropic API)
-      - name: web_fetch
-        source: builtin://web_fetch          # fetch URL → readable text
-      - name: http_request
-        source: builtin://http_request       # full HTTP control (method/headers/body)
-
-      # ── Interaction ─────────────────────────────────────────
-      - name: ask_user
-        source: builtin://ask_user           # ask the user a question
-      - name: task_manager
-        source: builtin://task_manager       # track subtasks and progress
-
-      # ── Orchestration ─────────────────────────────────────────
-      - name: parallel
-        source: builtin://parallel           # run multiple tools concurrently
+    # "tools: all" enables every built-in tool at once.
+    # For granular control, list only the ones you need:
+    #   tools:
+    #     - bash
+    #     - filesystem
+    #     - web_search
+    tools: all

@@ -51,6 +51,5 @@ agents:
         dependencies:
           pip: ["requests>=2.31"]
 
-      # ── Builtin tools (unchanged — still works) ──────────────────────
-      - name: shell
-        source: builtin://bash
+      # ── Built-in tools ──────────────────────────────────────────────
+      - bash

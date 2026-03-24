@@ -19,8 +19,7 @@ agents:
       temperature: 0.3
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash
 
     collaborators:
       - researcher
@@ -43,8 +42,7 @@ agents:
       temperature: 0.1
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash
 
   writer:
     metadata:
@@ -62,8 +60,7 @@ agents:
       temperature: 0.5
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash
 
   reviewer:
     metadata:
@@ -83,5 +80,4 @@ agents:
       temperature: 0.2
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash

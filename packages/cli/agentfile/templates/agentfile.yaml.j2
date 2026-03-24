@@ -28,8 +28,7 @@ agents:
       # tool_timeout: 30             # seconds before a tool call is aborted
       # history_window_tokens: 90000 # sliding-window token budget
     tools:
-      - name: shell
-        source: builtin://bash
+      - bash
     # MCP tools — requires `ninetrix dev --mcp` to start the MCP gateway
     # - name: web_search
     #   source: mcp://duckduckgo

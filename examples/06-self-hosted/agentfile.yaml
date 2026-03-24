@@ -27,8 +27,7 @@ agents:
       temperature: 0.3
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash
 
 persistence:
   provider: postgres

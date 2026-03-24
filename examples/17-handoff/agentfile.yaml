@@ -1,0 +1,61 @@
+schema_version: "1.1"
+
+# Two agents collaborate on trip planning via handoff.
+# The travel planner designs the itinerary, then hands off to the
+# budget analyst to estimate costs. The budget analyst returns a
+# cost breakdown, and the planner delivers the final plan.
+#
+# Run:  ninetrix build && ninetrix run --input "Plan a 5-day trip to Tokyo"
+
+agents:
+  travel-planner:
+    metadata:
+      name: travel-planner
+      role: Travel planner
+      goal: Design a detailed trip itinerary and deliver a final plan with costs
+      instructions: |
+        You are an expert travel planner. When the user asks for a trip:
+        1. Draft a day-by-day itinerary (activities, meals, transport)
+        2. Transfer to budget-analyst with the full itinerary so they can estimate costs
+        3. When the budget analyst returns the cost breakdown, combine everything
+           into a polished final plan with both the itinerary AND the budget summary
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.5
+
+    tools:
+      - bash
+      - web_search
+
+    collaborators:
+      - budget-analyst
+
+  budget-analyst:
+    metadata:
+      name: budget-analyst
+      role: Budget analyst
+      goal: Estimate realistic costs for a proposed travel itinerary
+      instructions: |
+        You receive a travel itinerary from the travel planner.
+        For each day, estimate costs in USD:
+        - Accommodation (per night)
+        - Meals (breakfast, lunch, dinner)
+        - Activities & entrance fees
+        - Local transport
+        Provide a per-day breakdown and a grand total.
+        Be realistic — use typical mid-range traveler prices.
+        After finishing, transfer back to the travel planner with your full cost breakdown.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+
+    tools:
+      - bash
+      - web_search
+
+    collaborators:
+      - travel-planner

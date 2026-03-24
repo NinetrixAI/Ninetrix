@@ -1,6 +1,6 @@
-# 12 — Builtin Shell & Filesystem
+# 12 — Bash & Filesystem
 
-An agent with full shell access inside its Docker container. No MCP servers needed — the `builtin://shell` and `builtin://filesystem` tools are embedded directly in the agent runtime.
+An agent with full shell access inside its Docker container. No MCP servers needed — `bash` and `filesystem` tools are embedded directly in the agent runtime.
 
 ## What it can do
 
@@ -12,8 +12,8 @@ An agent with full shell access inside its Docker container. No MCP servers need
 ## Run it
 
 ```bash
-agentfile build --file agentfile.yaml
-agentfile run --file agentfile.yaml
+ninetrix build
+ninetrix run
 ```
 
 Then ask it things like:
@@ -27,10 +27,10 @@ Then ask it things like:
 
 ## Tools
 
-| Tool | Source | What it does |
-|------|--------|-------------|
-| `shell` | `builtin://shell` | Execute any shell command with configurable timeout |
-| `filesystem` | `builtin://filesystem` | `read_file`, `write_file`, `list_dir` |
+| Tool | What it does |
+|------|-------------|
+| `bash` | Execute any shell command with configurable timeout |
+| `filesystem` | `read_file`, `write_file`, `list_dir` |
 
 ## Notes
 

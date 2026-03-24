@@ -286,7 +286,7 @@ class AgentDef(BaseModel):
     tool_timeout: int = 30
     history_window_tokens: int = 90_000
     output_type: Optional[dict[str, Any]] = None
-    builtin: bool = False
+    tools_all: bool = False  # True when tools: all
     tools: list[Tool] = Field(default_factory=list)
     skills: list[Skill] = Field(default_factory=list)
     governance: Optional[Governance] = None
@@ -411,9 +411,35 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
                 sync=str(v.get("sync", "bidirectional")),
             ))
 
+    # ── Parse tools: supports "all", plain strings, hub:// strings, and objects ──
+    _ALL_BUILTIN_NAMES = {
+        "bash", "shell", "filesystem", "memory", "scheduler",
+        "web_search", "web_browse", "notify", "ask_user",
+        "sub_agent", "code_interpreter",
+    }
+    raw_tools = araw.get("tools")
+    tools_all = False
+    parsed_tools: list[Tool] = []
+    if raw_tools == "all" or (isinstance(raw_tools, str) and raw_tools.strip().lower() == "all"):
+        tools_all = True
+    elif isinstance(raw_tools, list):
+        for t in raw_tools:
+            if isinstance(t, dict):
+                parsed_tools.append(Tool(**t))
+            elif isinstance(t, str):
+                # Known builtin name → convert to builtin:// source
+                if t in _ALL_BUILTIN_NAMES:
+                    parsed_tools.append(Tool(name=t, source=f"builtin://{t}"))
+                else:
+                    # hub:// or other URI shorthand
+                    parsed_tools.append(Tool(name=t.split("://")[-1].split("@")[0], source=t))
+    # Backward compat: builtin: true → tools_all
+    if not tools_all and bool(araw.get("builtin", False)):
+        tools_all = True
+
     return AgentDef(
         name=key,
-        builtin=bool(araw.get("builtin", False)),
+        tools_all=tools_all,
         description=str(meta.get("description", "") or ""),
         model=str(runtime.get("model", "claude-sonnet-4-6")),
         provider=str(runtime.get("provider", "anthropic")),
@@ -423,7 +449,7 @@ def _parse_agent_def(key: str, araw: dict) -> AgentDef:
         tool_timeout=int(runtime.get("tool_timeout", 30)),
         history_window_tokens=int(runtime.get("history_window_tokens", 90_000)),
         output_type=araw.get("output_type"),
-        tools=[Tool(**t) if isinstance(t, dict) else Tool(name=t.split("://")[-1].split("@")[0], source=t) for t in (araw.get("tools") or [])],
+        tools=parsed_tools,
         skills=[Skill(**s) if isinstance(s, dict) else Skill(source=s) for s in (araw.get("skills") or [])],
         governance=_parse_governance(araw["governance"]) if araw.get("governance") else None,
         triggers=[Trigger(**t) for t in (araw.get("triggers") or [])],
@@ -663,8 +689,8 @@ class AgentFile(BaseModel):
             if eff_gov.max_budget_per_run <= 0:
                 errors.append(f"{prefix}: governance.max_budget_per_run must be > 0")
 
-            if not agent.tools and not agent.builtin:
-                errors.append(f"{prefix}: at least one tool is required (or set builtin: true)")
+            if not agent.tools and not agent.tools_all:
+                errors.append(f"{prefix}: at least one tool is required (e.g. tools: [bash] or tools: all)")
             _ALL_BUILTINS = {
                 "bash", "filesystem", "memory", "scheduler",
                 "web_search", "web_browse", "notify", "ask_user",

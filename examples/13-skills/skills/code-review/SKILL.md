@@ -5,7 +5,7 @@ description: Systematic code review playbook
 author: ninetrix
 tags: [development, review, security]
 requires:
-  tools: [builtin://shell]
+  tools: [bash]
 ---
 
 # Code Review

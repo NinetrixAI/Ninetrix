@@ -114,12 +114,6 @@
         "additionalProperties": false,
         "properties": {
 
-          "builtin": {
-            "type": "boolean",
-            "default": false,
-            "description": "When true, all built-in tools are automatically available (bash, filesystem, memory, scheduler, web_search, web_browse, notify, ask_user, sub_agent, code_interpreter). No need to list them individually in tools."
-          },
-
           "metadata": {
             "type": "object",
             "description": "Agent persona and instructions — composed into the system prompt at build time.",
@@ -178,53 +172,62 @@
           },
 
           "tools": {
-            "type": "array",
-            "description": "Tools the agent can call. Required unless builtin: true is set.",
-            "items": {
-              "oneOf": [
-                { "type": "string", "pattern": "^hub://", "description": "Hub tool shorthand: hub://gh or hub://gh@1.0.0" },
-                {
-                  "type": "object",
-                  "required": ["name", "source"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
-                    "source": {
-                      "type": "string",
-                      "pattern": "^([a-z][a-z0-9_]*://|\\./|/).+",
-                      "description": "Tool source URI. Built-in schemes: builtin://, mcp://, composio://, openapi://. Local files: ./path/to/tools.py. Extensible via community plugins."
-                    },
-                    "actions": {
-                      "type": "array",
-                      "items": { "type": "string", "minLength": 1 },
-                      "description": "Filter to specific operations/actions to expose."
-                    },
-                    "auth": {
+            "description": "Tools the agent can call. Use short strings for built-in tools (e.g. 'bash', 'web_search'), 'hub://name' for hub tools, objects for external tools, or 'all' to enable all built-in tools.",
+            "oneOf": [
+              {
+                "type": "string",
+                "const": "all",
+                "description": "Enable all built-in tools (bash, filesystem, memory, scheduler, web_search, web_browse, notify, ask_user, sub_agent, code_interpreter)."
+              },
+              {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    { "type": "string", "description": "Built-in tool name (bash, filesystem, web_search, etc.) or hub://name shorthand." },
+                    {
                       "type": "object",
-                      "description": "Authentication config for this tool source.",
+                      "required": ["name", "source"],
+                      "additionalProperties": false,
                       "properties": {
-                        "type":        { "type": "string", "enum": ["bearer", "basic", "header", "api_key_query"] },
-                        "token":       { "type": "string" },
-                        "header_name": { "type": "string" },
-                        "username":    { "type": "string" },
-                        "password":    { "type": "string" },
-                        "query_param": { "type": "string" }
+                        "name":   { "type": "string", "minLength": 1, "description": "Local name for this tool (used in logs and approval gate config)." },
+                        "source": {
+                          "type": "string",
+                          "pattern": "^([a-z][a-z0-9_]*://|\\./|/).+",
+                          "description": "Tool source URI. Schemes: mcp://, composio://, openapi://, builtin://. Local files: ./path/to/tools.py. Extensible via community plugins."
+                        },
+                        "actions": {
+                          "type": "array",
+                          "items": { "type": "string", "minLength": 1 },
+                          "description": "Filter to specific operations/actions to expose."
+                        },
+                        "auth": {
+                          "type": "object",
+                          "description": "Authentication config for this tool source.",
+                          "properties": {
+                            "type":        { "type": "string", "enum": ["bearer", "basic", "header", "api_key_query"] },
+                            "token":       { "type": "string" },
+                            "header_name": { "type": "string" },
+                            "username":    { "type": "string" },
+                            "password":    { "type": "string" },
+                            "query_param": { "type": "string" }
+                          }
+                        },
+                        "dependencies": {
+                          "type": "object",
+                          "description": "Extra packages or install commands for this tool.",
+                          "properties": {
+                            "pip": { "type": "array", "items": { "type": "string" } },
+                            "apt": { "type": "array", "items": { "type": "string" } },
+                            "install": { "type": "string", "description": "Shell command to install a CLI tool (from Tool Hub)." }
+                          }
+                        },
+                        "base_url": { "type": "string", "description": "Override the base URL for OpenAPI sources." }
                       }
-                    },
-                    "dependencies": {
-                      "type": "object",
-                      "description": "Extra packages or install commands for this tool.",
-                      "properties": {
-                        "pip": { "type": "array", "items": { "type": "string" } },
-                        "apt": { "type": "array", "items": { "type": "string" } },
-                        "install": { "type": "string", "description": "Shell command to install a CLI tool (from Tool Hub)." }
-                      }
-                    },
-                    "base_url": { "type": "string", "description": "Override the base URL for OpenAPI sources." }
-                  }
+                    }
+                  ]
                 }
-              ]
-            }
+              }
+            ]
           },
 
           "packages": {

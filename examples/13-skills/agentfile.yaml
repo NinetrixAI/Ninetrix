@@ -21,8 +21,7 @@ agents:
       model: claude-sonnet-4-6
       temperature: 0.2
     tools:
-      - name: shell
-        source: builtin://shell
+      - bash
     skills:
       - source: hub://error-handling-playbook
       - source: hub://agent-browser

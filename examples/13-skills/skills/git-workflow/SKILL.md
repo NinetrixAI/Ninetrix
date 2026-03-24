@@ -5,7 +5,7 @@ description: Git branching and commit message conventions
 author: ninetrix
 tags: [development, git, workflow]
 requires:
-  tools: [builtin://shell]
+  tools: [bash]
 ---
 
 # Git Workflow

@@ -16,5 +16,4 @@ agents:
       temperature: 0.2
 
     tools:
-      - name: bash
-        source: builtin://bash
+      - bash
