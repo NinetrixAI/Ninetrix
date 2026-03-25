@@ -41,6 +41,8 @@ if _PYDANTIC_AVAILABLE:
         thinking_min_input_length: int = 50
         thinking_prompt: str = ""
         has_webhook_triggers: bool = False
+        has_channel_triggers: bool = False
+        channel_types: list = []
         has_schedule_triggers: bool = False
         has_any_triggers: bool = False
         webhook_trigger_defs: list = []
@@ -296,19 +298,34 @@ def build_context(
     thinking_provider = thinking_cfg.provider or agent.provider
     thinking_model    = thinking_cfg.model    or agent.model
 
-    has_webhook_triggers  = bool(agent.webhook_triggers())
+    # webhook_triggers() includes channel triggers for port binding purposes,
+    # but has_webhook_triggers should only be True for actual webhook triggers
+    # (not channel triggers) — channel messages flow through ChannelManager → /chat,
+    # not through the webhook trigger queue.
+    _pure_webhook_triggers = [t for t in eff_triggers if t.type == "webhook"]
+    has_webhook_triggers  = bool(_pure_webhook_triggers)
+    _channel_triggers     = [t for t in eff_triggers if t.type == "channel"]
+    has_channel_triggers  = bool(_channel_triggers)
+    # Collect unique channel types across all channel triggers
+    _channel_types_set: set[str] = set()
+    for _ct in _channel_triggers:
+        _channel_types_set.update(_ct.channels)
+    channel_types = sorted(_channel_types_set)
     has_schedule_triggers = bool(agent.schedule_triggers())
-    has_any_triggers      = has_webhook_triggers or has_schedule_triggers
+    has_any_triggers      = has_webhook_triggers or has_schedule_triggers or has_channel_triggers
 
     webhook_trigger_defs  = [
         {"endpoint": t.endpoint or "/run", "port": t.port}
-        for t in agent.webhook_triggers()
+        for t in _pure_webhook_triggers
     ]
     schedule_trigger_defs = [
         {"cron": t.cron, "message": t.message or "Run your scheduled task."}
         for t in agent.schedule_triggers()
     ]
-    webhook_port = agent.webhook_triggers()[0].port if agent.webhook_triggers() else 8000
+    # Port for the webhook/channel server — channel triggers also need a port
+    # because the ChannelManager calls /chat on the internal FastAPI server.
+    _all_trigger_ports = _pure_webhook_triggers + _channel_triggers
+    webhook_port = _all_trigger_ports[0].port if _all_trigger_ports else 8000
 
     is_multi_agent    = af.is_multi_agent
     collaborators     = agent_def.collaborators
@@ -464,6 +481,9 @@ def build_context(
                 if _hub_entry.install:
                     _collected_install.append(_hub_entry.install)
     # Feature-level deps
+    if has_channel_triggers:
+        # ninetrix-channels is copied into the build context (not from PyPI)
+        _collected_pip.add("httpx>=0.27")
     if has_any_triggers or is_multi_agent or has_invoke_server:
         _collected_pip.update(["fastapi>=0.104", "uvicorn[standard]>=0.24"])
     if has_schedule_triggers:
@@ -519,6 +539,8 @@ def build_context(
         "thinking_min_input_length":  thinking_cfg.min_input_length,
         "thinking_prompt":            thinking_cfg.prompt,
         "has_webhook_triggers":       has_webhook_triggers,
+        "has_channel_triggers":       has_channel_triggers,
+        "channel_types":              channel_types,
         "has_schedule_triggers":      has_schedule_triggers,
         "has_any_triggers":           has_any_triggers,
         "webhook_trigger_defs":       webhook_trigger_defs,

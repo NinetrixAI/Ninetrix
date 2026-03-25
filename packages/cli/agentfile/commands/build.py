@@ -61,6 +61,14 @@ def _render_templates(
         _sdk_pkg = Path(list(_spec.submodule_search_locations)[0])
         shutil.copytree(_sdk_pkg, context_dir / "ninetrix", dirs_exist_ok=True)
 
+    # Bundle ninetrix-channels into the build context when channel triggers are
+    # configured. The package is not on PyPI — it's installed from the local copy.
+    if ctx.get("has_channel_triggers"):
+        _ch_spec = importlib.util.find_spec("ninetrix_channels")
+        if _ch_spec and _ch_spec.submodule_search_locations:
+            _ch_pkg = Path(list(_ch_spec.submodule_search_locations)[0])
+            shutil.copytree(_ch_pkg, context_dir / "ninetrix_channels", dirs_exist_ok=True)
+
     # Copy local @Tool Python files into the build context under tools/
     if ctx.get("has_local_tools") and ctx.get("local_source_paths"):
         tools_dir = context_dir / "tools"

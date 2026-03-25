@@ -181,7 +181,7 @@ async def main() -> None:
 {% endif %}
             _invoke_state["semaphore"] = asyncio.Semaphore(AGENTFILE_CONCURRENCY)
 {% endif %}
-{% if has_webhook_triggers or is_multi_agent or is_saas_runner %}
+{% if has_webhook_triggers or has_channel_triggers or is_multi_agent or is_saas_runner %}
             # Publish state for the /chat endpoint
             _chat_state["sessions_by_tool"] = sessions_by_tool
             _chat_state["all_tool_defs"]    = all_tool_defs
@@ -192,7 +192,7 @@ async def main() -> None:
             _chat_state["ready"] = True
 {% endif %}
 
-{% if has_webhook_triggers or is_multi_agent or is_saas_runner or has_invoke_server %}
+{% if has_webhook_triggers or has_channel_triggers or is_multi_agent or is_saas_runner or has_invoke_server %}
 {% if is_multi_agent or has_invoke_server %}
             _uvicorn_port = INVOKE_PORT
 {% elif is_saas_runner %}
@@ -224,6 +224,72 @@ async def main() -> None:
             print(f"[invoke] Agent '{{ agent.name }}' accepting /invoke requests on :{_uvicorn_port}")
 {% endif %}
 {% endif %}
+{% if has_channel_triggers %}
+            # ── Channel Manager — persistent inbound messaging ──────────────
+            # Bridges Telegram/WhatsApp/Discord messages to the /chat handler.
+            _channel_config = {}
+{% for _ctype in channel_types %}
+            _ch_{{ _ctype }}_token = os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_BOT_TOKEN", "")
+            if _ch_{{ _ctype }}_token:
+                _channel_config["{{ _ctype }}"] = {
+                    "bot_token": _ch_{{ _ctype }}_token,
+                    "chat_id": os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_CHAT_ID", ""),
+                    "channel_id": os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_CHANNEL_ID", ""),
+                }
+{% endfor %}
+
+            _channel_manager = None
+            _ch_verbose = os.environ.get("AGENTFILE_CHANNEL_VERBOSE", "true").lower() in ("1", "true", "yes")
+            if _channel_config:
+                import httpx as _ch_httpx
+
+                async def _channel_agent_callback(
+                    text: str, session_id: str, channel_type: str, username: str,
+                ) -> str:
+                    """Bridge channel messages into the /chat handler."""
+                    if _ch_verbose:
+                        _console.print(
+                            f"[dim][{channel_type}][/dim] "
+                            f"[bold cyan]@{username}[/bold cyan]: {text[:200]}",
+                            highlight=False,
+                        )
+                    _ch_body = {"message": text, "session_id": session_id, "channel_type": channel_type}
+                    # Call the /chat endpoint internally via HTTP to reuse all
+                    # existing session management, telemetry, and checkpointing.
+                    try:
+                        async with _ch_httpx.AsyncClient(timeout=300) as _ch_client:
+                            _ch_resp = await _ch_client.post(
+                                f"http://127.0.0.1:{_uvicorn_port}/chat",
+                                json=_ch_body,
+                            )
+                            if _ch_resp.status_code == 200:
+                                _ch_data = _ch_resp.json()
+                                _ch_response = _ch_data.get("response", "(no response)")
+                            else:
+                                _ch_response = f"Agent error ({_ch_resp.status_code})"
+                    except Exception as _ch_exc:
+                        print(f"[channel] Dispatch error: {_ch_exc}", file=sys.stderr)
+                        _ch_response = "Something went wrong."
+                    if _ch_verbose:
+                        _preview = _ch_response[:300]
+                        if len(_ch_response) > 300:
+                            _preview += "…"
+                        _console.print(
+                            f"[dim][{channel_type}][/dim] "
+                            f"[bold green]→[/bold green] {_preview}",
+                            highlight=False,
+                        )
+                    return _ch_response
+
+                _ch_session_mode = os.environ.get("AGENTFILE_CHANNEL_SESSION_MODE", "per_chat")
+                _channel_manager = ChannelManager(
+                    _channel_config, _channel_agent_callback,
+                    session_mode=_ch_session_mode,
+                )
+                await _channel_manager.start()
+                _ch_names = ", ".join(_channel_config.keys())
+                print(f"Channel manager started: {_ch_names}")
+{% endif %}
 {% if has_schedule_triggers %}
             _scheduler = AsyncIOScheduler()
 {% for trigger in schedule_trigger_defs %}
@@ -236,7 +302,13 @@ async def main() -> None:
 {% endfor %}
             _scheduler.start()
 {% endif %}
-{% if has_any_triggers %}
+{% if has_any_triggers and not has_channel_triggers %}
+            print("Agent ready — waiting for triggers.\n")
+{% elif has_channel_triggers and not has_webhook_triggers and not has_schedule_triggers %}
+            # Channel-only mode — ChannelManager handles messages, keep alive.
+            print("Agent ready — listening on channels.\n")
+            await asyncio.Event().wait()
+{% elif has_any_triggers %}
             print("Agent ready — waiting for triggers.\n")
 {% elif has_invoke_server %}
             print("Agent ready — waiting for /invoke requests.\n")
@@ -245,6 +317,7 @@ async def main() -> None:
             await asyncio.Event().wait()
 {% else %}
             print("Send a message (Ctrl+C to quit):\n")
+            _input_reader.start()
 {% endif %}
 
 {% if (not is_multi_agent and not is_saas_runner) or has_any_triggers or has_invoke_server %}
@@ -271,8 +344,7 @@ async def main() -> None:
                 else:
                     try:
 {% if has_builtin_scheduler %}
-                        # Non-blocking input with reminder polling every 2 seconds
-                        import select as _select
+                        # Non-blocking input with reminder polling
                         user_input = ""
                         while not user_input:
                             _fired = _drain_reminders()
@@ -284,10 +356,15 @@ async def main() -> None:
                                     + "Please notify me about these reminders now."
                                 )
                                 break
-                            if _select.select([sys.stdin], [], [], 2.0)[0]:
-                                user_input = input("> ").strip()
+                            _maybe = await _input_reader.get("> ")
+                            if _maybe is None:
+                                raise EOFError
+                            user_input = _maybe
 {% else %}
-                        user_input = input("> ").strip()
+                        _maybe = await _input_reader.get("> ")
+                        if _maybe is None:
+                            raise EOFError
+                        user_input = _maybe
 {% endif %}
                     except (KeyboardInterrupt, EOFError):
                         print("\nBye.")
@@ -368,6 +445,7 @@ async def main() -> None:
                 except Exception as _route_exc:
                     print(f"[router] Failed: {_route_exc}", file=sys.stderr, flush=True)
 {% else %}
+                _input_reader.set_busy(True)
                 try:
                     await _run_turn(
 {% if has_planned_execution %}
@@ -425,15 +503,33 @@ async def main() -> None:
 {% endif %}
                 else:
                     pass
+                finally:
+                    _input_reader.set_busy(False)
+                # ── Drain messages queued while agent was busy ────────────
+                _queued = _input_reader.drain()
+                if _queued:
+                    _combined = "\n".join(m for m in _queued if m)
+                    if _combined.strip():
+                        print(f"\n  Processing {len(_queued)} queued message(s)…\n",
+                              file=sys.stderr, flush=True)
+                        # Inject as the next iteration's input
+                        _replay_input = _combined
 {% endif %}{# has_auto_routing else #}
 
                 print()
 {% endif %}{# not is_multi_agent or has_any_triggers #}
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
-{% if has_webhook_triggers or has_schedule_triggers or is_multi_agent or has_s3_volumes or is_saas_runner or has_invoke_server %}
+{% if has_webhook_triggers or has_channel_triggers or has_schedule_triggers or is_multi_agent or has_s3_volumes or is_saas_runner or has_invoke_server %}
     finally:
-{% if has_webhook_triggers or is_multi_agent or is_saas_runner %}
+{% if has_channel_triggers %}
+        try:
+            if _channel_manager is not None:
+                asyncio.get_event_loop().run_until_complete(_channel_manager.stop())
+        except Exception:
+            pass
+{% endif %}
+{% if has_webhook_triggers or has_channel_triggers or is_multi_agent or is_saas_runner %}
         try:
             _uvicorn_server.should_exit = True
         except Exception:

@@ -204,6 +204,7 @@ class Trigger(BaseModel):
     target_agent: Optional[str] = None
     channels: list[str] = []           # channel types: ["telegram", "whatsapp"]
     session_mode: str = "per_chat"     # per_message | per_chat
+    verbose: bool = True               # print channel I/O to agent console
 
 
 class Verifier(BaseModel):

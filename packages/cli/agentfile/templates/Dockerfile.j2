@@ -37,9 +37,14 @@ RUN --mount=type=cache,target=/var/cache/apt \
 {% endif %}
 {% for _cmd in collected_deps.install %}
 
-# CLI tool install (legacy)
+# CLI tool install
 RUN {{ _cmd }}
 {% endfor %}
+{% if collected_deps.install %}
+
+# Ensure user-installed CLIs are on PATH (~/.local/bin is the standard install location)
+ENV PATH="/root/.local/bin:${PATH}"
+{% endif %}
 
 # Install Python runtime dependencies + ninetrix-sdk
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -56,6 +61,12 @@ COPY agentfile.yaml /app/agentfile.yaml
 
 # Copy agent entrypoint
 COPY entrypoint.py /app/entrypoint.py
+{% if has_channel_triggers %}
+
+# Copy ninetrix-channels package (not on PyPI — bundled from host)
+COPY ninetrix_channels/ /app/ninetrix_channels/
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+{% endif %}
 {% if has_local_tools %}
 
 # Copy local @Tool Python files
@@ -67,7 +78,7 @@ ENV AGENTFILE_MODEL="{{ agent.model }}"
 ENV AGENTFILE_PROVIDER="{{ agent.provider }}"
 ENV AGENTFILE_TEMPERATURE="{{ agent.temperature }}"
 
-{% if has_webhook_triggers %}
+{% if has_webhook_triggers or has_channel_triggers %}
 EXPOSE {{ webhook_port }}
 {% endif %}
 {% if is_multi_agent %}

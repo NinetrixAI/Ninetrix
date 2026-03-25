@@ -502,22 +502,49 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
         if _k.startswith("AGENTFILE_"):
             env.setdefault(_k, _v)
 
-    # Start Telegram bridge if channel triggers are configured
+    # Inject channel credentials into container env vars.
+    # The in-container ChannelManager reads these to connect to platforms.
     _bridge = None
     if channel_triggers:
-        from agentfile.core.channel_config import is_verified as _ch_verified
+        from agentfile.core.channel_config import is_verified as _ch_verified, get_channel as _get_ch
+
+        _all_channel_types: set[str] = set()
         for ct in channel_triggers:
-            if "telegram" in ct.channels and _ch_verified("telegram"):
-                from agentfile.core.channel_bridge import ChannelBridge
-                _bridge_port = ct.port or 9100
-                _bridge_endpoint = ct.endpoint or "/run"
-                _bridge = ChannelBridge(agent_port=_bridge_port, agent_name=agent.name, endpoint=_bridge_endpoint)
-                if _bridge.start():
-                    from agentfile.core.channel_config import get_channel as _get_ch
-                    tg_cfg = _get_ch("telegram")
-                    bot_name = tg_cfg.get("bot_username", "?") if tg_cfg else "?"
-                    console.print(f"  [green]📱 Telegram bridge active:[/green] @{bot_name} → localhost:{_bridge_port}/run\n")
-                break
+            _all_channel_types.update(ct.channels)
+            # Inject session_mode and verbose from the trigger config
+            env.setdefault("AGENTFILE_CHANNEL_SESSION_MODE", ct.session_mode)
+            env.setdefault("AGENTFILE_CHANNEL_VERBOSE", "true" if ct.verbose else "false")
+
+        for _ch_type in sorted(_all_channel_types):
+            _ch_cfg = _get_ch(_ch_type)
+            if _ch_cfg and _ch_cfg.get("verified"):
+                _prefix = f"AGENTFILE_CHANNEL_{_ch_type.upper()}"
+                if _ch_cfg.get("bot_token"):
+                    env[f"{_prefix}_BOT_TOKEN"] = _ch_cfg["bot_token"]
+                if _ch_cfg.get("chat_id"):
+                    env[f"{_prefix}_CHAT_ID"] = str(_ch_cfg["chat_id"])
+                _ch_label = _ch_cfg.get("bot_username") or _ch_type
+                console.print(
+                    f"  [green]📱 {_ch_type.title()} channel:[/green] "
+                    f"credentials injected into container (@{_ch_label})"
+                )
+
+        # Fallback: start external ChannelBridge for Telegram if the
+        # container doesn't have ninetrix-channels installed (e.g. old image).
+        # New images use the in-container ChannelManager instead.
+        _use_legacy_bridge = os.environ.get("AGENTFILE_CHANNEL_LEGACY_BRIDGE", "").lower() in ("1", "true")
+        if _use_legacy_bridge:
+            for ct in channel_triggers:
+                if "telegram" in ct.channels and _ch_verified("telegram"):
+                    from agentfile.core.channel_bridge import ChannelBridge
+                    _bridge_port = ct.port or 9100
+                    _bridge_endpoint = ct.endpoint or "/run"
+                    _bridge = ChannelBridge(agent_port=_bridge_port, agent_name=agent.name, endpoint=_bridge_endpoint)
+                    if _bridge.start():
+                        tg_cfg = _get_ch("telegram")
+                        bot_name = tg_cfg.get("bot_username", "?") if tg_cfg else "?"
+                        console.print(f"  [green]📱 Telegram bridge active (legacy):[/green] @{bot_name} → localhost:{_bridge_port}/run\n")
+                    break
 
     res = agent.resources
     try:
