@@ -140,6 +140,27 @@ class AgentStats(BaseModel):
     last_heartbeat: datetime | None = None
 
 
+# ── Scores ────────────────────────────────────────────────────────────────────
+
+class RunScore(BaseModel):
+    id: str
+    thread_id: str
+    name: str
+    value: float | None = None
+    label: str | None = None
+    comment: str | None = None
+    scorer: str
+    created_at: datetime
+
+
+class CreateScorePayload(BaseModel):
+    name: str = "quality"
+    value: float | None = None     # numeric score (e.g. 0.0–1.0)
+    label: str | None = None       # categorical (e.g. "good", "bad")
+    comment: str | None = None
+    scorer: str = "human"
+
+
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
 class SessionSummary(BaseModel):

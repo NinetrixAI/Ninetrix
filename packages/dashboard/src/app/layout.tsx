@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Outfit, DM_Mono } from "next/font/google";
+import ThemeInit from "@/components/theme-init";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -21,16 +22,6 @@ export const metadata: Metadata = {
   description: "Observability for local agent runs",
 };
 
-// Runs before hydration to prevent flash of wrong theme
-const themeScript = `
-(function(){
-  try {
-    var t = localStorage.getItem('nxt-theme');
-    if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
-  } catch(e) {}
-})();
-`;
-
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -38,10 +29,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${outfit.variable} ${dmMono.variable}`} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-      </head>
-      <body>{children}</body>
+      <body>
+        <ThemeInit />
+        {children}
+      </body>
     </html>
   );
 }

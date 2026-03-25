@@ -171,6 +171,17 @@ body {
   animation: slide-in-right 0.35s ease-out both;
 }
 
+/* ── React Flow overrides ────────────────────────────────────────────────── */
+
+.react-flow__node { cursor: default !important; }
+.react-flow__node.selected,
+.react-flow__node:focus { outline: none !important; box-shadow: none !important; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--text-dim) !important; }
+.react-flow__handle { opacity: 0 !important; }
+.react-flow__attribution { display: none !important; }
+.react-flow__minimap, .react-flow__controls { display: none; }
+.react-flow__pane { cursor: grab !important; }
+
 /* ── Skeleton ────────────────────────────────────────────────────────────── */
 
 .skeleton {

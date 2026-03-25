@@ -27,6 +27,7 @@ from ninetrix_api.routers import agents, approvals, channels, integrations, runn
 async def lifespan(app: FastAPI):
     await db.connect()
     await db.create_runner_events_table()
+    await db.create_scores_table()
     await db.create_integration_tables()
     init_machine_secret()
     # Start channel polling (Telegram getUpdates) — no tunnel needed for local dev

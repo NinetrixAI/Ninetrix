@@ -103,6 +103,17 @@ export interface SessionSummary {
   first_active: string;
 }
 
+export interface RunScore {
+  id: string;
+  thread_id: string;
+  name: string;
+  value: number | null;
+  label: string | null;
+  comment: string | null;
+  scorer: string;
+  created_at: string;
+}
+
 export interface ApiStatus {
   connected: boolean;
   latencyMs?: number;
@@ -195,6 +206,24 @@ export async function listThreads(opts?: {
 
 export async function listSessions(): Promise<SessionSummary[]> {
   return apiFetch<SessionSummary[]>("/threads/sessions");
+}
+
+export async function getScores(threadId: string): Promise<RunScore[]> {
+  return apiFetch<RunScore[]>(`/threads/${encodeURIComponent(threadId)}/scores`);
+}
+
+export async function addScore(threadId: string, opts: {
+  name?: string;
+  value?: number | null;
+  label?: string | null;
+  comment?: string | null;
+  scorer?: string;
+}): Promise<RunScore> {
+  return apiFetch<RunScore>(`/threads/${encodeURIComponent(threadId)}/scores`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
 }
 
 export async function getAnalytics(days: number = 30): Promise<AnalyticsSummary> {

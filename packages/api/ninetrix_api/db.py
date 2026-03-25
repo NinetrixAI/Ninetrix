@@ -299,6 +299,26 @@ async def create_runner_events_table() -> None:
     """)
 
 
+async def create_scores_table() -> None:
+    """Create run_scores table for evaluation/annotation. Idempotent."""
+    await pool().execute("""
+        CREATE TABLE IF NOT EXISTS run_scores (
+            id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            thread_id   TEXT        NOT NULL,
+            name        TEXT        NOT NULL DEFAULT 'quality',
+            value       FLOAT,
+            label       TEXT,
+            comment     TEXT,
+            scorer      TEXT        NOT NULL DEFAULT 'human',
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    await pool().execute("""
+        CREATE INDEX IF NOT EXISTS idx_run_scores_thread
+            ON run_scores(thread_id)
+    """)
+
+
 async def create_integration_tables() -> None:
     """Create integration tables and seed catalog data. Idempotent."""
     p = pool()

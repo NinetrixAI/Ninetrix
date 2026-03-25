@@ -11,8 +11,11 @@ import {
   getThreadTimeline,
   checkApiStatus,
   subscribeThreadStream,
+  getScores,
+  addScore,
   type ThreadSummary,
   type TimelineEvent,
+  type RunScore,
   type AgentStats,
   type ApiStatus,
   type Channel,
@@ -1068,6 +1071,283 @@ function ToolsStat({ nodes }: { nodes: TraceNode[] }) {
   );
 }
 
+/* ── Agent Graph (React Flow + dagre) ────────────────────────────────────── */
+
+import {
+  ReactFlow,
+  type Node as RFNode,
+  type Edge as RFEdge,
+  type NodeProps,
+  Position,
+  MarkerType,
+  Handle,
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  type EdgeProps,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import dagre from "dagre";
+
+const AGENT_COLORS = ["#60A5FA", "#A78BFA", "#4ADE80", "#FBBF24", "#22D3EE", "#EF4444", "#F472B6", "#34D399"];
+
+const NODE_W = 220;
+const NODE_H = 80;
+
+/* Custom agent node */
+function AgentNode({ data }: NodeProps) {
+  const d = data as {
+    label: string; model: string | null; llm: number; tools: number;
+    toolNames: string[]; errors: number; tokens: string; cost: string;
+    color: string; index: number;
+  };
+  const hasErrors = d.errors > 0;
+  return (
+    <>
+      <Handle type="target" position={Position.Left} style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
+      <Handle type="source" position={Position.Right} style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
+      <div
+        style={{
+          width: NODE_W, boxSizing: "border-box",
+          background: "var(--bg-surface)",
+          border: `1px solid ${hasErrors ? "var(--red)" : "var(--border)"}`,
+          borderLeft: `3px solid ${d.color}`,
+          borderRadius: 8,
+          padding: "10px 14px",
+        }}
+      >
+        {/* Row 1: name + order */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, fontFamily: "var(--font-mono)", color: "var(--text)" }}>
+            {d.label}
+          </span>
+          <span style={{
+            fontSize: 9, fontWeight: 700, width: 18, height: 18, borderRadius: "50%",
+            background: `${d.color}22`, color: d.color, display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            {d.index + 1}
+          </span>
+        </div>
+        {/* Row 2: model + error */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+          {d.model && (
+            <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-dim)" }}>
+              {d.model}
+            </span>
+          )}
+          {hasErrors && (
+            <span style={{ fontSize: 9, fontWeight: 600, padding: "1px 5px", borderRadius: 3, background: "var(--red-dim)", color: "var(--red)" }}>
+              {d.errors} err
+            </span>
+          )}
+        </div>
+        {/* Row 3: stats */}
+        <div style={{ display: "flex", gap: 8, fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
+          <span>{d.llm} llm</span>
+          <span>{d.tools} tools</span>
+          <span>{d.tokens}t</span>
+          {d.cost !== "$0.00" && <span>{d.cost}</span>}
+        </div>
+        {/* Row 4: tool pills */}
+        {d.toolNames.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 6 }}>
+            {d.toolNames.slice(0, 4).map((t) => (
+              <span key={t} style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "var(--bg-raised)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
+                {t}
+              </span>
+            ))}
+            {d.toolNames.length > 4 && (
+              <span style={{ fontSize: 9, color: "var(--text-dim)" }}>+{d.toolNames.length - 4}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* Custom edge with clean label */
+function HandoffEdge(props: EdgeProps) {
+  const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd } = props;
+  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  const d = data as { label: string } | undefined;
+  return (
+    <>
+      <BaseEdge path={edgePath} markerEnd={markerEnd} style={{ stroke: "var(--text-dim)", strokeWidth: 1.5, opacity: 0.5 }} />
+      {d?.label && (
+        <EdgeLabelRenderer>
+          <div
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: "none",
+              fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--text-dim)",
+              background: "var(--bg)", padding: "2px 6px", borderRadius: 4,
+              border: "1px solid var(--border)", whiteSpace: "nowrap", maxWidth: 180,
+              overflow: "hidden", textOverflow: "ellipsis",
+            }}
+          >
+            {d.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
+const nodeTypes = { agentNode: AgentNode };
+const edgeTypes = { handoff: HandoffEdge };
+
+function layoutGraph(rfNodes: RFNode[], rfEdges: RFEdge[]): RFNode[] {
+  const g = new dagre.graphlib.Graph();
+  g.setDefaultEdgeLabel(() => ({}));
+  g.setGraph({ rankdir: "LR", ranksep: 140, nodesep: 50 });
+  for (const node of rfNodes) {
+    g.setNode(node.id, { width: NODE_W + 20, height: NODE_H + 40 });
+  }
+  for (const edge of rfEdges) {
+    g.setEdge(edge.source, edge.target);
+  }
+  dagre.layout(g);
+  return rfNodes.map((node) => {
+    const pos = g.node(node.id);
+    return { ...node, position: { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 } };
+  });
+}
+
+function AgentGraph({ nodes }: { nodes: TraceNode[] }) {
+  // Derive agents and their stats + tool names
+  const agentData = useMemo(() => {
+    const map = new Map<string, { llm: number; tools: number; tokens: number; cost: number; model: string | null; toolNames: Set<string>; errors: number }>();
+    for (const n of nodes) {
+      if (!map.has(n.agentId)) {
+        map.set(n.agentId, { llm: 0, tools: 0, tokens: 0, cost: 0, model: null, toolNames: new Set(), errors: 0 });
+      }
+      const a = map.get(n.agentId)!;
+      if (n.type === "llm") { a.llm++; if (n.model && !a.model) a.model = n.model; }
+      if (n.type === "tool") { a.tools++; if (n.label) a.toolNames.add(n.label); }
+      if (n.status === "error") a.errors++;
+      a.tokens += (n.inputTokens ?? 0) + (n.outputTokens ?? 0);
+      a.cost += n.estimatedCostUsd ?? 0;
+    }
+    return map;
+  }, [nodes]);
+
+  // Derive edges from execution flow + capture handoff message from the last node before switch
+  const handoffEdges = useMemo(() => {
+    const edgeMap = new Map<string, { count: number; messages: string[] }>();
+    for (let i = 1; i < nodes.length; i++) {
+      const prev = nodes[i - 1];
+      const curr = nodes[i];
+      if (prev.agentId !== curr.agentId) {
+        const key = `${prev.agentId}→${curr.agentId}`;
+        const entry = edgeMap.get(key) ?? { count: 0, messages: [] };
+        entry.count++;
+        // Capture handoff message — look for the handoff/tool_call node near the switch
+        const handoffNode = nodes.slice(Math.max(0, i - 3), i).reverse()
+          .find((n) => n.type === "handoff" && n.agentId === prev.agentId);
+        if (handoffNode?.handoffContent?.message) {
+          entry.messages.push(handoffNode.handoffContent.message.slice(0, 80));
+        }
+        edgeMap.set(key, entry);
+      }
+    }
+    return Array.from(edgeMap.entries()).map(([key, data]) => {
+      const [from, to] = key.split("→");
+      return { from, to, count: data.count, message: data.messages[0] ?? "" };
+    });
+  }, [nodes]);
+
+  const agentIds = useMemo(() => [...agentData.keys()], [agentData]);
+
+  // Execution order
+  const agentOrder = useMemo(() => {
+    const order: string[] = [];
+    const seen = new Set<string>();
+    for (const n of nodes) {
+      if (!seen.has(n.agentId)) { seen.add(n.agentId); order.push(n.agentId); }
+    }
+    return order;
+  }, [nodes]);
+
+  // Build React Flow nodes and edges
+  const { rfNodes, rfEdges } = useMemo(() => {
+    const rawNodes: RFNode[] = agentOrder.map((id, i) => {
+      const data = agentData.get(id)!;
+      const color = AGENT_COLORS[i % AGENT_COLORS.length];
+      return {
+        id,
+        type: "agentNode",
+        position: { x: 0, y: 0 },
+        data: {
+          label: id,
+          model: data.model ? shortModel(data.model) : null,
+          llm: data.llm,
+          tools: data.tools,
+          toolNames: [...data.toolNames],
+          errors: data.errors,
+          tokens: formatTokens(data.tokens),
+          cost: formatCost(data.cost),
+          color,
+          index: i,
+        },
+      };
+    });
+
+    const rawEdges: RFEdge[] = handoffEdges.map((e, i) => ({
+      id: `e-${i}`,
+      source: e.from,
+      target: e.to,
+      type: "handoff",
+      data: { label: e.count > 1 ? `${e.count}x handoff` : "handoff" },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--text-dim)", width: 14, height: 10 },
+    }));
+
+    const laid = layoutGraph(rawNodes, rawEdges);
+    return { rfNodes: laid, rfEdges: rawEdges };
+  }, [agentOrder, agentData, handoffEdges]);
+
+  if (agentIds.length <= 1) {
+    return (
+      <div className="flex items-center justify-center" style={{ height: 200, color: "var(--text-dim)", fontSize: 13, fontFamily: "var(--font-mono)" }}>
+        Single agent — no graph to display
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+      <div style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+        <span style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: "0.08em", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+          AGENT GRAPH
+        </span>
+        <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: 8 }}>
+          {agentIds.length} agents, {handoffEdges.length} handoff{handoffEdges.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+      <div style={{ height: 300 }}>
+        <ReactFlow
+          nodes={rfNodes}
+          edges={rfEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.4 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          panOnDrag
+          zoomOnScroll={false}
+          minZoom={0.5}
+          maxZoom={1.5}
+          proOptions={{ hideAttribution: true }}
+          style={{ background: "var(--bg)" }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function StatsLines({
   thread,
   stats,
@@ -1140,7 +1420,9 @@ export default function RunDetailPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [selectedNode, setSelectedNode] = useState<TraceNode | null>(null);
   const [liveMs, setLiveMs] = useState(0);
-  const [tab, setTab] = useState<"waterfall" | "timeline">("waterfall");
+  const [tab, setTab] = useState<"waterfall" | "timeline" | "graph">("waterfall");
+  const [scores, setScores] = useState<RunScore[]>([]);
+  const [scoreSaving, setScoreSaving] = useState(false);
 
   const sseRef = useRef<(() => void) | null>(null);
   const accEventsRef = useRef<TimelineEvent[]>([]);
@@ -1182,6 +1464,28 @@ export default function RunDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [threadId, fetchTimeline]);
+
+  // Load scores
+  useEffect(() => {
+    if (!threadId) return;
+    getScores(threadId).then(setScores).catch(() => {});
+  }, [threadId]);
+
+  const currentScore = useMemo(() => {
+    const quality = scores.find((s) => s.name === "quality");
+    if (!quality) return null;
+    return quality.label;
+  }, [scores]);
+
+  const handleScore = async (label: string) => {
+    if (!threadId || scoreSaving) return;
+    setScoreSaving(true);
+    try {
+      const s = await addScore(threadId, { name: "quality", label, scorer: "human" });
+      setScores((prev) => [s, ...prev]);
+    } catch { /* ignore */ }
+    finally { setScoreSaving(false); }
+  };
 
   // Load sidebar data
   const fetchChannels = useCallback(() => {
@@ -1315,7 +1619,7 @@ export default function RunDetailPage() {
             {thread && <StatusBadge status={thread.status} />}
 
             {isLive && (
-              <span className="inline-flex items-center gap-1.5 shrink-0 ml-auto" style={{
+              <span className="inline-flex items-center gap-1.5 shrink-0" style={{
                 fontSize: 10, fontWeight: 600, color: "var(--green)",
                 background: "var(--green-dim)", border: "1px solid rgba(74,222,128,0.2)",
                 borderRadius: 4, padding: "2px 7px",
@@ -1324,6 +1628,49 @@ export default function RunDetailPage() {
                 LIVE
               </span>
             )}
+
+            {/* Score — thumbs up/down */}
+            <div className="flex items-center gap-1 ml-auto shrink-0">
+              {currentScore && (
+                <span style={{
+                  fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: 4, marginRight: 4,
+                  background: currentScore === "good" ? "var(--green-dim)" : "var(--red-dim)",
+                  color: currentScore === "good" ? "var(--green)" : "var(--red)",
+                }}>
+                  {currentScore === "good" ? "Good" : "Bad"}
+                </span>
+              )}
+              <button
+                onClick={() => handleScore("good")}
+                disabled={scoreSaving}
+                title="Rate as good"
+                className="cursor-pointer inline-flex items-center justify-center"
+                style={{
+                  width: 28, height: 28, borderRadius: 6,
+                  border: `1px solid ${currentScore === "good" ? "var(--green)" : "var(--border)"}`,
+                  background: currentScore === "good" ? "var(--green-dim)" : "transparent",
+                  color: currentScore === "good" ? "var(--green)" : "var(--text-muted)",
+                  fontSize: 14, opacity: scoreSaving ? 0.5 : 1,
+                }}
+              >
+                &#x1F44D;
+              </button>
+              <button
+                onClick={() => handleScore("bad")}
+                disabled={scoreSaving}
+                title="Rate as bad"
+                className="cursor-pointer inline-flex items-center justify-center"
+                style={{
+                  width: 28, height: 28, borderRadius: 6,
+                  border: `1px solid ${currentScore === "bad" ? "var(--red)" : "var(--border)"}`,
+                  background: currentScore === "bad" ? "var(--red-dim)" : "transparent",
+                  color: currentScore === "bad" ? "var(--red)" : "var(--text-muted)",
+                  fontSize: 14, opacity: scoreSaving ? 0.5 : 1,
+                }}
+              >
+                &#x1F44E;
+              </button>
+            </div>
           </div>
 
           {/* Stats line */}
@@ -1360,7 +1707,7 @@ export default function RunDetailPage() {
           <div style={{ padding: "24px 32px" }}>
             {/* Tab switcher */}
             <div className="flex items-center gap-1" style={{ marginBottom: 16 }}>
-              {(["waterfall", "timeline"] as const).map((t) => (
+              {(["waterfall", "timeline", "graph"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -1372,47 +1719,51 @@ export default function RunDetailPage() {
                     color: tab === t ? "var(--text)" : "var(--text-muted)",
                   }}
                 >
-                  {t === "waterfall" ? "Waterfall" : "Timeline"}
+                  {t === "waterfall" ? "Waterfall" : t === "timeline" ? "Timeline" : "Graph"}
                 </button>
               ))}
             </div>
 
-            {/* Waterfall / Timeline + Detail side by side */}
-            <div className="flex gap-6" style={{ alignItems: "flex-start" }}>
-              {/* Left: chart */}
-              <div style={{ flex: 1, minWidth: 0 }}>
-                {tab === "waterfall" ? (
-                  <WaterfallChart
-                    nodes={nodes}
-                    totalMs={totalMs}
-                    liveMs={liveMs}
-                    isRunning={isRunning}
-                    selectedId={selectedNode?.id ?? null}
-                    onSelect={setSelectedNode}
-                  />
-                ) : (
-                  <Timeline
-                    nodes={nodes}
-                    selectedId={selectedNode?.id ?? null}
-                    onSelect={setSelectedNode}
-                  />
-                )}
-              </div>
+            {/* Tab content */}
+            {tab === "graph" ? (
+              <AgentGraph nodes={nodes} />
+            ) : (
+              <div className="flex gap-6" style={{ alignItems: "flex-start" }}>
+                {/* Left: chart */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {tab === "waterfall" ? (
+                    <WaterfallChart
+                      nodes={nodes}
+                      totalMs={totalMs}
+                      liveMs={liveMs}
+                      isRunning={isRunning}
+                      selectedId={selectedNode?.id ?? null}
+                      onSelect={setSelectedNode}
+                    />
+                  ) : (
+                    <Timeline
+                      nodes={nodes}
+                      selectedId={selectedNode?.id ?? null}
+                      onSelect={setSelectedNode}
+                    />
+                  )}
+                </div>
 
-              {/* Right: detail panel */}
-              <div
-                style={{
-                  width: 380, flexShrink: 0,
-                  background: "var(--bg-surface)", borderRadius: 8,
-                  border: "1px solid var(--border)",
-                  position: "sticky", top: 16,
-                  maxHeight: "calc(100vh - 32px)",
-                  overflow: "hidden",
-                }}
-              >
-                <EventDetail node={selectedNode} />
+                {/* Right: detail panel */}
+                <div
+                  style={{
+                    width: 380, flexShrink: 0,
+                    background: "var(--bg-surface)", borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    position: "sticky", top: 16,
+                    maxHeight: "calc(100vh - 32px)",
+                    overflow: "hidden",
+                  }}
+                >
+                  <EventDetail node={selectedNode} />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </main>

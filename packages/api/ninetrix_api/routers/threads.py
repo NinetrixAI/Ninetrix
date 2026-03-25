@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ninetrix_api import db
-from ninetrix_api.models import AgentSummary, AnalyticsSummary, DailyStats, LogEntry, Page, SessionSummary, ThreadDetail, ThreadSummary, TimelineEvent
+from ninetrix_api.models import AgentSummary, AnalyticsSummary, CreateScorePayload, DailyStats, LogEntry, Page, RunScore, SessionSummary, ThreadDetail, ThreadSummary, TimelineEvent
 
 router = APIRouter()
 
@@ -946,6 +946,52 @@ async def stream_thread(thread_id: str, request: Request):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.get("/{thread_id}/scores", response_model=list[RunScore])
+async def get_scores(thread_id: str):
+    """Get all scores for a run."""
+    rows = await db.pool().fetch(
+        "SELECT * FROM run_scores WHERE thread_id = $1 ORDER BY created_at DESC",
+        thread_id,
+    )
+    return [
+        RunScore(
+            id=str(r["id"]),
+            thread_id=r["thread_id"],
+            name=r["name"],
+            value=r["value"],
+            label=r["label"],
+            comment=r["comment"],
+            scorer=r["scorer"],
+            created_at=r["created_at"],
+        )
+        for r in rows
+    ]
+
+
+@router.post("/{thread_id}/scores", response_model=RunScore)
+async def add_score(thread_id: str, payload: CreateScorePayload):
+    """Add a score to a run (manual annotation or programmatic)."""
+    row = await db.pool().fetchrow(
+        """
+        INSERT INTO run_scores (thread_id, name, value, label, comment, scorer)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+        """,
+        thread_id, payload.name, payload.value, payload.label,
+        payload.comment, payload.scorer,
+    )
+    return RunScore(
+        id=str(row["id"]),
+        thread_id=row["thread_id"],
+        name=row["name"],
+        value=row["value"],
+        label=row["label"],
+        comment=row["comment"],
+        scorer=row["scorer"],
+        created_at=row["created_at"],
     )
 
 

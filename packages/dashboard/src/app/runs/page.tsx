@@ -69,6 +69,15 @@ export default function RunsPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const [search, setSearch] = useState("");
+
+  // Read ?search= from URL after hydration (avoids SSR mismatch)
+  const searchInitRef = useRef(false);
+  useEffect(() => {
+    if (searchInitRef.current) return;
+    searchInitRef.current = true;
+    const q = new URLSearchParams(window.location.search).get("search");
+    if (q) setSearch(q);
+  }, []);
   const [statusFilter, setStatusFilter] = useState("all");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -83,6 +92,8 @@ export default function RunsPage() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sseCleanupRef = useRef<(() => void) | null>(null);
@@ -354,19 +365,32 @@ export default function RunsPage() {
                   {(["runs", "sessions"] as const).map((m) => (
                     <button
                       key={m}
-                      onClick={() => setViewMode(m)}
+                      onClick={() => { setViewMode(m); setCompareMode(false); setCompareIds(new Set()); }}
                       className="cursor-pointer"
                       style={{
                         padding: "3px 10px", borderRadius: 4, border: "none",
-                        fontSize: 11.5, fontWeight: viewMode === m ? 500 : 400,
-                        background: viewMode === m ? "var(--bg-surface)" : "transparent",
-                        color: viewMode === m ? "var(--text)" : "var(--text-muted)",
-                        boxShadow: viewMode === m ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                        fontSize: 11.5, fontWeight: viewMode === m && !compareMode ? 500 : 400,
+                        background: viewMode === m && !compareMode ? "var(--bg-surface)" : "transparent",
+                        color: viewMode === m && !compareMode ? "var(--text)" : "var(--text-muted)",
+                        boxShadow: viewMode === m && !compareMode ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
                       }}
                     >
                       {m === "runs" ? "All Runs" : "Sessions"}
                     </button>
                   ))}
+                  <button
+                    onClick={() => { setViewMode("runs"); setCompareMode((v) => !v); if (compareMode) setCompareIds(new Set()); }}
+                    className="cursor-pointer"
+                    style={{
+                      padding: "3px 10px", borderRadius: 4, border: "none",
+                      fontSize: 11.5, fontWeight: compareMode ? 500 : 400,
+                      background: compareMode ? "var(--bg-surface)" : "transparent",
+                      color: compareMode ? "var(--purple)" : "var(--text-muted)",
+                      boxShadow: compareMode ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                    }}
+                  >
+                    Compare
+                  </button>
                 </div>
               </div>
               <p
@@ -499,6 +523,13 @@ export default function RunsPage() {
                 </button>
               )}
             </div>
+
+            {/* Compare hint (inline) */}
+            {compareMode && compareIds.size < 2 && (
+              <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>
+                Select {2 - compareIds.size} run{compareIds.size === 0 ? "s" : ""} to compare
+              </span>
+            )}
           </div>
         </header>
 
@@ -670,22 +701,22 @@ export default function RunsPage() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["RUN ID", "AGENT", "STATUS", "DURATION", "TOKENS", "COST", "MODEL", "STARTED", ""].map((h) => (
+                  {(compareMode ? ["", "RUN ID", "AGENT", "STATUS", "DURATION", "TOKENS", "COST", "MODEL", "STARTED", ""] : ["RUN ID", "AGENT", "STATUS", "DURATION", "TOKENS", "COST", "MODEL", "STARTED", ""]).map((h, hi) => (
                     <th
-                      key={h || "__action"}
+                      key={h || `__col${hi}`}
                       style={{
                         padding: "0 16px",
                         height: 36,
                         fontSize: 10.5,
                         fontWeight: 500,
                         color: "var(--text-dim)",
-                        textAlign: h === "DURATION" || h === "TOKENS" || h === "STARTED" ? "right" : h === "COST" ? "right" : "left",
+                        textAlign: h === "DURATION" || h === "TOKENS" || h === "STARTED" || h === "COST" ? "right" : "left",
                         letterSpacing: "0.06em",
                         textTransform: "uppercase",
                         borderBottom: "1px solid var(--border)",
                         background: "var(--bg)",
                         whiteSpace: "nowrap",
-                        width: h === "" ? 48 : undefined,
+                        width: compareMode && hi === 0 ? 36 : (h === "" ? 48 : undefined),
                       }}
                     >
                       {h}
@@ -708,6 +739,33 @@ export default function RunsPage() {
                         onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = "var(--bg-hover)"; }}
                         onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}
                       >
+                        {/* Compare checkbox (only in compare mode) */}
+                        {compareMode && (
+                          <td style={{ padding: "10px 8px 10px 16px", width: 36 }}>
+                            <input
+                              type="checkbox"
+                              checked={compareIds.has(t.thread_id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                setCompareIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) {
+                                    if (next.size >= 2) {
+                                      const first = [...next][0];
+                                      next.delete(first);
+                                    }
+                                    next.add(t.thread_id);
+                                  } else {
+                                    next.delete(t.thread_id);
+                                  }
+                                  return next;
+                                });
+                              }}
+                              style={{ width: 14, height: 14, cursor: "pointer", accentColor: "var(--purple)" }}
+                            />
+                          </td>
+                        )}
+
                         {/* Run ID */}
                         <td style={{ padding: "10px 16px" }}>
                           <span
@@ -864,7 +922,7 @@ export default function RunsPage() {
                       {/* Inline trace panel */}
                       {isSelected && (
                         <tr>
-                          <td colSpan={9} style={{ padding: 0 }}>
+                          <td colSpan={compareMode ? 10 : 9} style={{ padding: 0 }}>
                             {traceLoading ? (
                               <div style={{ padding: "16px 32px" }}>
                                 <div className="skeleton" style={{ height: 120, borderRadius: 6 }} />
@@ -944,6 +1002,71 @@ export default function RunsPage() {
             </div>
           )}
         </div>}
+        {/* Fixed compare bar */}
+        {compareMode && compareIds.size > 0 && (
+          <div
+            className="animate-fade-in"
+            style={{
+              position: "fixed", bottom: 0, left: "var(--sidebar-w)", right: 0,
+              padding: "12px 32px",
+              background: "var(--bg-surface)",
+              borderTop: "1px solid var(--border)",
+              boxShadow: "0 -4px 16px rgba(0,0,0,0.15)",
+              zIndex: 40,
+              display: "flex", alignItems: "center", gap: 12,
+            }}
+          >
+            <span style={{ fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--text-secondary)" }}>
+              {compareIds.size}/2 selected
+            </span>
+            {[...compareIds].map((id) => (
+              <span
+                key={id}
+                className="inline-flex items-center gap-1.5"
+                style={{
+                  fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-dim)",
+                  background: "var(--bg-raised)", padding: "3px 8px", borderRadius: 4,
+                  border: "1px solid var(--border)",
+                }}
+              >
+                {id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id}
+                <button
+                  onClick={() => setCompareIds((prev) => { const n = new Set(prev); n.delete(id); return n; })}
+                  className="cursor-pointer"
+                  style={{ background: "none", border: "none", color: "var(--text-muted)", fontSize: 12, padding: 0, lineHeight: 1 }}
+                >
+                  &times;
+                </button>
+              </span>
+            ))}
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={() => { setCompareIds(new Set()); setCompareMode(false); }}
+                className="cursor-pointer"
+                style={{
+                  padding: "6px 14px", borderRadius: 6,
+                  border: "1px solid var(--border)", background: "transparent",
+                  color: "var(--text-muted)", fontSize: 12,
+                }}
+              >
+                Cancel
+              </button>
+              {compareIds.size === 2 && (
+                <Link
+                  href={`/runs/compare?a=${encodeURIComponent([...compareIds][0])}&b=${encodeURIComponent([...compareIds][1])}`}
+                  className="inline-flex items-center no-underline"
+                  style={{
+                    padding: "6px 20px", borderRadius: 6,
+                    background: "var(--purple)", color: "#fff",
+                    fontSize: 12, fontWeight: 600,
+                  }}
+                >
+                  Compare Runs
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
