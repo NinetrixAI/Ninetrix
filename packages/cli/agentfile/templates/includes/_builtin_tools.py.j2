@@ -818,31 +818,163 @@ _BUILTIN_ASK_USER_DEF = {
 {% endif %}
 
 {% if has_builtin_sub_agent %}
-# ── Sub Agent (lightweight LLM worker) ───────────────────────────────────────
+# ── Sub Agent v2 (agentic loop with tool access) ─────────────────────────────
 
-async def _builtin_sub_agent(task: str, model: str = "", max_tokens: int = 2048) -> str:
-    """Spawn a lightweight sub-agent LLM call for a specific task."""
-    try:
-        sub_model = model or MODEL
-        sub_litellm = f"{_PROVIDER_PREFIX.get(PROVIDER, PROVIDER)}/{sub_model}"
-        messages = [
-            {"role": "system", "content": "You are a helpful sub-agent. Complete the task concisely."},
-            {"role": "user", "content": task},
-        ]
-        response = await asyncio.to_thread(
-            litellm.completion,
-            model=sub_litellm,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=TEMP,
+_SUB_AGENT_MAX_CONCURRENT = 5   # hard cap on parallel sub-agents
+_SUB_AGENT_TIMEOUT = 120        # per sub-agent timeout in seconds
+
+
+async def _builtin_sub_agent(
+    task: str,
+    tools: list | None = None,
+    model: str = "",
+    max_turns: int = 5,
+    max_tokens: int = 4096,
+    label: str = "",
+    *,
+    _parent_sessions: dict | None = None,
+    _parent_tool_defs: list | None = None,
+{% if has_composio_tools %}
+    _composio_toolset=None,
+    _composio_tool_names: set | None = None,
+{% endif %}
+) -> str:
+    """Spawn a sub-agent with its own agentic loop, tool access, and tracing.
+
+    Args:
+        task:   The task description for the sub-agent.
+        tools:  Tool names the sub-agent can use. [] or None = text-only.
+                ["*"] = all parent tools minus blocked ones.
+        model:  Override model (default: same as parent).
+        max_turns: Max agentic loop turns (default: 5, max: 20).
+        max_tokens: Max output tokens per LLM call.
+        label:  Human-readable label for traces (e.g. "researcher").
+    """
+    _effective_tools = tools or []
+    _effective_max_turns = min(max(1, max_turns), 20)
+    _label = label or f"sub_{uuid.uuid4().hex[:6]}"
+    _sub_trace_id = f"sub_{uuid.uuid4().hex[:12]}"
+    _sub_agent_id = f"{AGENT_ID}:{_label}"
+
+    print(f"[sub_agent] Spawning '{_label}' (tools={_effective_tools}, max_turns={_effective_max_turns})", flush=True)
+
+    # Post transfer-started event for dashboard tracing
+    _post_runner_event("agent_transfer_started", {
+        "thread_id": THREAD_ID,
+        "from": AGENT_ID,
+        "to": _sub_agent_id,
+        "message_preview": task[:200],
+    })
+
+    # Create sub-agent checkpointer (links to parent via parent_trace_id)
+    sub_cp = None
+    if _SAAS_PERSIST:
+        sub_cp = _SaaSCheckpointer(
+            thread_id=THREAD_ID,
+            trace_id=_sub_trace_id,
+            parent_trace_id=TRACE_ID,
+            agent_id=_sub_agent_id,
         )
-        result_text = response.choices[0].message.content or ""
-        _in_tok = getattr(response.usage, "prompt_tokens", 0)
-        _out_tok = getattr(response.usage, "completion_tokens", 0)
-        _charge(sub_litellm, _in_tok, _out_tok, label="sub_agent")
-        return result_text
+    _start_t = time.perf_counter()
+
+    try:
+        result = await asyncio.wait_for(
+            _sub_agent_loop(
+                task=task,
+                tools=_effective_tools,
+                sessions_by_tool=_parent_sessions or {},
+                tool_definitions=_parent_tool_defs or [],
+{% if has_composio_tools %}
+                composio_toolset=_composio_toolset,
+                composio_tool_names=_composio_tool_names or set(),
+{% endif %}
+                model=model,
+                max_turns=_effective_max_turns,
+                max_tokens=max_tokens,
+                label=_label,
+                sub_cp=sub_cp,
+            ),
+            timeout=_SUB_AGENT_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        result = f"[sub_agent] '{_label}' timed out after {_SUB_AGENT_TIMEOUT}s"
+    except BudgetExceededError:
+        result = f"[sub_agent] '{_label}' exceeded budget"
     except Exception as exc:
-        return f"[error] {type(exc).__name__}: {exc}"
+        result = f"[sub_agent error] {type(exc).__name__}: {exc}"
+
+    _elapsed_ms = int((time.perf_counter() - _start_t) * 1000)
+    _is_error = result.startswith("[sub_agent") and ("error" in result or "timed out" in result or "exceeded" in result)
+
+    # Post transfer-completed/failed event
+    _event_type = "agent_transfer_failed" if _is_error else "agent_transfer_completed"
+    _post_runner_event(_event_type, {
+        "thread_id": THREAD_ID,
+        "from": AGENT_ID,
+        "to": _sub_agent_id,
+        "duration_ms": _elapsed_ms,
+        **({"error": "sub_agent_error", "detail": result[:500]} if _is_error else {"result_preview": result[:200]}),
+    })
+
+    _dur_str = f"{_elapsed_ms}ms" if _elapsed_ms < 1000 else f"{_elapsed_ms / 1000:.1f}s"
+    print(f"[sub_agent] '{_label}' completed ({_dur_str}): {result[:150].replace(chr(10), ' ')}", flush=True)
+    return result
+
+
+async def _builtin_sub_agents_parallel(
+    tasks: list,
+    max_concurrent: int = 3,
+    *,
+    _parent_sessions: dict | None = None,
+    _parent_tool_defs: list | None = None,
+{% if has_composio_tools %}
+    _composio_toolset=None,
+    _composio_tool_names: set | None = None,
+{% endif %}
+) -> str:
+    """Run multiple sub-agents in parallel and collect results."""
+    if not tasks:
+        return "[error] No tasks provided"
+
+    _effective_max = min(max(1, max_concurrent), _SUB_AGENT_MAX_CONCURRENT)
+    _sem = asyncio.Semaphore(_effective_max)
+    print(f"[sub_agents_parallel] Spawning {len(tasks)} sub-agents (max_concurrent={_effective_max})", flush=True)
+
+    async def _run_one(spec: dict) -> tuple[str, str]:
+        async with _sem:
+            _lbl = spec.get("label", "")
+            _result = await _builtin_sub_agent(
+                task=spec.get("task", ""),
+                tools=spec.get("tools"),
+                model=spec.get("model", ""),
+                max_turns=int(spec.get("max_turns", 5)),
+                max_tokens=int(spec.get("max_tokens", 4096)),
+                label=_lbl,
+                _parent_sessions=_parent_sessions,
+                _parent_tool_defs=_parent_tool_defs,
+{% if has_composio_tools %}
+                _composio_toolset=_composio_toolset,
+                _composio_tool_names=_composio_tool_names,
+{% endif %}
+            )
+            return _lbl or "sub", _result
+
+    results = await asyncio.gather(
+        *[_run_one(spec) for spec in tasks],
+        return_exceptions=True,
+    )
+
+    parts = []
+    for i, r in enumerate(results):
+        _lbl = tasks[i].get("label", f"sub_{i}")
+        if isinstance(r, Exception):
+            parts.append(f"[{_lbl}]: Error: {r}")
+        else:
+            parts.append(f"[{r[0]}]: {r[1]}")
+
+    merged = "\n\n---\n\n".join(parts)
+    print(f"[sub_agents_parallel] All {len(tasks)} sub-agents completed", flush=True)
+    return merged
 
 
 _BUILTIN_SUB_AGENT_DEF = {
@@ -850,18 +982,72 @@ _BUILTIN_SUB_AGENT_DEF = {
     "function": {
         "name": "sub_agent",
         "description": (
-            "Spawn a lightweight LLM sub-agent to handle a specific subtask. "
-            "The sub-agent runs a single LLM call with no tools — good for "
-            "summarization, analysis, drafting, or transformation tasks. "
-            "Costs are tracked against the main agent's budget."
+            "Spawn a sub-agent to handle a specific subtask. The sub-agent runs its own "
+            "agentic loop with access to a filtered subset of your tools. Good for parallel "
+            "research, analysis, drafting, summarization, or any task that benefits from "
+            "focused independent work. Costs are tracked against the main agent's budget. "
+            "Pass tools=[] for a quick text-only response, or tools=['web_search', 'bash'] "
+            "to give the sub-agent specific capabilities."
         ),
         "parameters": {
             "type": "object",
             "required": ["task"],
             "properties": {
                 "task": {"type": "string", "description": "The task for the sub-agent to complete"},
+                "tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Tool names the sub-agent can use. Empty array or omit for text-only "
+                        "(single LLM call, no tools). Use ['*'] for all available tools. "
+                        "Example: ['web_search', 'bash', 'read_file']"
+                    ),
+                    "default": []
+                },
                 "model": {"type": "string", "description": "Model override (default: same as main agent)", "default": ""},
-                "max_tokens": {"type": "integer", "description": "Max output tokens (default: 2048)", "default": 2048}
+                "max_turns": {"type": "integer", "description": "Max agentic loop turns (default: 5, max: 20)", "default": 5},
+                "max_tokens": {"type": "integer", "description": "Max output tokens per LLM call (default: 4096)", "default": 4096},
+                "label": {"type": "string", "description": "Human-readable label shown in traces (e.g. 'researcher', 'analyst')", "default": ""}
+            }
+        }
+    }
+}
+
+_BUILTIN_SUB_AGENTS_PARALLEL_DEF = {
+    "type": "function",
+    "function": {
+        "name": "sub_agents_parallel",
+        "description": (
+            "Run multiple sub-agents in parallel and collect all results. Each sub-agent "
+            "gets its own agentic loop with independent tool access. Use this when you have "
+            "multiple independent tasks that can run concurrently — e.g. researching different "
+            "topics, analyzing different data sources, or drafting different sections."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["tasks"],
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "description": "List of sub-agent task specifications to run in parallel",
+                    "items": {
+                        "type": "object",
+                        "required": ["task"],
+                        "properties": {
+                            "task": {"type": "string", "description": "The task for this sub-agent"},
+                            "tools": {"type": "array", "items": {"type": "string"}, "description": "Tool names (empty=text-only, ['*']=all)", "default": []},
+                            "model": {"type": "string", "description": "Model override", "default": ""},
+                            "max_turns": {"type": "integer", "description": "Max turns (default: 5)", "default": 5},
+                            "max_tokens": {"type": "integer", "description": "Max output tokens (default: 4096)", "default": 4096},
+                            "label": {"type": "string", "description": "Label for traces", "default": ""}
+                        }
+                    }
+                },
+                "max_concurrent": {
+                    "type": "integer",
+                    "description": "Max sub-agents to run simultaneously (default: 3, max: 5)",
+                    "default": 3
+                }
             }
         }
     }
@@ -955,6 +1141,8 @@ _BUILTIN_TOOL_NAMES.add("ask_user")
 {% if has_builtin_sub_agent %}
 _BUILTIN_TOOL_DEFS.append(_BUILTIN_SUB_AGENT_DEF)
 _BUILTIN_TOOL_NAMES.add("sub_agent")
+_BUILTIN_TOOL_DEFS.append(_BUILTIN_SUB_AGENTS_PARALLEL_DEF)
+_BUILTIN_TOOL_NAMES.add("sub_agents_parallel")
 {% endif %}
 {% if has_builtin_code_interpreter %}
 _BUILTIN_TOOL_DEFS.append(_BUILTIN_CODE_INTERPRETER_DEF)
@@ -1028,9 +1216,9 @@ def _exec_builtin_tool(fn_name: str, fn_args: dict) -> str:
         return _builtin_ask_user(fn_args.get("question", ""))
 {% endif %}
 {% if has_builtin_sub_agent %}
-    if fn_name == "sub_agent":
-        # sub_agent is async — dispatched directly from _run_turn via await
-        return "[error] sub_agent must be called via async dispatch"
+    if fn_name in ("sub_agent", "sub_agents_parallel"):
+        # sub_agent/sub_agents_parallel are async — dispatched directly from _run_turn
+        return "[error] sub_agent tools must be called via async dispatch"
 {% endif %}
 {% if has_builtin_code_interpreter %}
     if fn_name == "code_interpreter":

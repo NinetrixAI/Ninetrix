@@ -413,6 +413,18 @@ async def ingest_events(
                     log.info("team_completed | thread=%s routed_to=%s tokens=%d",
                              thread_id, routed_to, tokens_used)
 
+                elif event.type in ("agent_transfer_started",
+                                    "agent_transfer_completed",
+                                    "agent_transfer_failed"):
+                    # Informational events for sub-agent / collaborator transfers.
+                    # The actual trace data arrives via checkpoint events with
+                    # parent_trace_id set — these are just logged for debugging.
+                    _from = data.get("from", "?")
+                    _to   = data.get("to", "?")
+                    saved += 1
+                    log.info("%s | %s → %s (thread=%s)",
+                             event.type, _from, _to, data.get("thread_id", ""))
+
                 elif event.type == "heartbeat":
                     agent_id = data.get("agent_id", "")
                     if agent_id:

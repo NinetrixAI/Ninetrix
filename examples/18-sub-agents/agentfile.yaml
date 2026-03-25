@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=https://schema.ninetrix.io/agentfile.json
+# Example: Sub-agents — spawn parallel LLM workers with tool access
+schema_version: "1.1"
+
+governance:
+  max_budget_per_run: 3.00
+  rate_limit: 30_requests_per_minute
+
+agents:
+  research-orchestrator:
+    metadata:
+      description: An orchestrator agent that spawns sub-agents for parallel research
+      role: Research Orchestrator
+      goal: Break complex research tasks into parallel sub-agent work, synthesize results
+      instructions: |
+        You are a research orchestrator. When given a research topic:
+
+        1. Identify 2-3 independent research angles
+        2. Spawn sub-agents in parallel using sub_agents_parallel — each with
+           web_search and web_browse tools so they can independently research
+        3. Synthesize all results into a cohesive report
+
+        Sub-agent tips:
+        - Use `sub_agents_parallel` for independent tasks (faster — runs concurrently)
+        - Use `sub_agent` for a single focused task
+        - Give each sub-agent a descriptive `label` (e.g. "market-researcher", "tech-analyst")
+        - Pass `tools: ["web_search", "web_browse"]` so sub-agents can browse the web
+        - Pass `tools: []` (or omit) for text-only tasks like summarization or drafting
+
+        Example flow:
+        ```
+        sub_agents_parallel(tasks=[
+          { task: "Research X from a technical perspective", tools: ["web_search", "web_browse"], label: "tech-analyst" },
+          { task: "Research X from a market perspective",   tools: ["web_search", "web_browse"], label: "market-analyst" },
+          { task: "Find counter-arguments to X",            tools: ["web_search"],               label: "critic" }
+        ])
+        ```
+
+        After receiving all results, write the final synthesized report yourself.
+      constraints:
+        - Always use labeled sub-agents for traceability
+        - Never spawn more than 5 sub-agents at once
+        - Synthesize results yourself — don't delegate the final report
+
+    runtime:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      temperature: 0.3
+      max_tokens: 8192
+      max_turns: 15
+      tool_timeout: 60
+
+    tools:
+      - sub_agent
+      - web_search
+      - web_browse

@@ -252,9 +252,29 @@ async def _run_turn(
 {% if has_builtin_sub_agent %}
                     if fn_name == "sub_agent":
                         result_str = await _builtin_sub_agent(
-                            fn_args.get("task", ""),
+                            task=fn_args.get("task", ""),
+                            tools=fn_args.get("tools"),
                             model=fn_args.get("model", ""),
-                            max_tokens=int(fn_args.get("max_tokens", 2048)),
+                            max_turns=int(fn_args.get("max_turns", 5)),
+                            max_tokens=int(fn_args.get("max_tokens", 4096)),
+                            label=fn_args.get("label", ""),
+                            _parent_sessions=sessions_by_tool,
+                            _parent_tool_defs=tool_definitions,
+{% if has_composio_tools %}
+                            _composio_toolset=composio_toolset,
+                            _composio_tool_names=composio_tool_names,
+{% endif %}
+                        )
+                    elif fn_name == "sub_agents_parallel":
+                        result_str = await _builtin_sub_agents_parallel(
+                            tasks=fn_args.get("tasks", []),
+                            max_concurrent=int(fn_args.get("max_concurrent", 3)),
+                            _parent_sessions=sessions_by_tool,
+                            _parent_tool_defs=tool_definitions,
+{% if has_composio_tools %}
+                            _composio_toolset=composio_toolset,
+                            _composio_tool_names=composio_tool_names,
+{% endif %}
                         )
                     else:
                         result_str = _exec_builtin_tool(fn_name, fn_args)
@@ -324,3 +344,234 @@ async def _run_turn(
     if messages_out is not None:
         messages_out[:] = [m for m in messages if m.get("role") != "system"]
     print(f"[warning] Reached maximum turns ({MAX_TURNS}). Stopping.")
+
+
+{% if has_builtin_sub_agent %}
+# ── Sub-agent agentic loop ────────────────────────────────────────────────────
+# A lightweight agentic loop for sub-agents. Runs inside the same container as a
+# coroutine — reuses parent's MCP sessions, builtin tools, and budget tracking.
+# Each sub-agent gets its own message history, trace_id, and checkpointer.
+
+# Tools that sub-agents must never access (prevent nesting / user interaction)
+_SUBAGENT_BLOCKED_TOOLS = {"sub_agent", "sub_agents_parallel", "transfer_to_agent",
+                           "transfer_to_agents_parallel", "ask_user"}
+
+
+def _filter_sub_tools(
+    requested: list[str],
+    parent_tool_defs: list[dict],
+    parent_sessions_by_tool: dict,
+) -> tuple[list[dict], dict]:
+    """Build filtered tool definitions and session map for a sub-agent.
+
+    Args:
+        requested: Tool names requested by the parent. Empty = text-only (no tools).
+                   ["*"] = all parent tools minus blocked ones.
+        parent_tool_defs: Full tool_definitions list from the parent agent.
+        parent_sessions_by_tool: Parent's MCP sessions_by_tool dict.
+
+    Returns:
+        (filtered_tool_defs, filtered_sessions) tuple.
+    """
+    if not requested:
+        return [], {}
+
+    use_all = requested == ["*"] or "*" in requested
+
+    filtered_defs: list[dict] = []
+    filtered_sessions: dict = {}
+
+    for td in parent_tool_defs:
+        fn = td.get("function", {})
+        name = fn.get("name", "")
+        if name in _SUBAGENT_BLOCKED_TOOLS:
+            continue
+        if use_all or name in requested:
+            filtered_defs.append(td)
+            if name in parent_sessions_by_tool:
+                filtered_sessions[name] = parent_sessions_by_tool[name]
+
+    return filtered_defs, filtered_sessions
+
+
+async def _sub_agent_loop(
+    task: str,
+    tools: list[str],
+    sessions_by_tool: dict,
+    tool_definitions: list,
+{% if has_composio_tools %}
+    composio_toolset,
+    composio_tool_names: set,
+{% endif %}
+    model: str = "",
+    max_turns: int = 5,
+    max_tokens: int = 4096,
+    label: str = "",
+    sub_cp=None,
+) -> str:
+    """Run a mini agentic loop for a sub-agent with filtered tool access.
+
+    Returns the final assistant text response.
+    """
+    sub_model = model or MODEL
+    sub_litellm = f"{_PROVIDER_PREFIX.get(PROVIDER, PROVIDER)}/{sub_model}"
+    sub_agent_id = f"{AGENT_ID}:{label}" if label else f"{AGENT_ID}:sub"
+
+    # Filter tools for this sub-agent
+    sub_tool_defs, sub_sessions = _filter_sub_tools(
+        tools, tool_definitions, sessions_by_tool,
+    )
+
+    # Build message history
+    messages: list = [
+        {"role": "system", "content": (
+            f"You are a focused sub-agent of '{AGENT_ID}'. "
+            "Complete the assigned task thoroughly and return the result. "
+            "Be concise but complete. Do not ask for clarification."
+        )},
+        {"role": "user", "content": task},
+    ]
+    if sub_cp is not None:
+        sub_cp.record("user")
+
+    # If no tools requested, do a single LLM call (v1 compat)
+    if not sub_tool_defs:
+        try:
+            response = await litellm.acompletion(
+                model=sub_litellm,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=TEMP,
+                num_retries=2,
+            )
+            result_text = response.choices[0].message.content or ""
+            _in = getattr(response.usage, "prompt_tokens", 0) or 0
+            _out = getattr(response.usage, "completion_tokens", 0) or 0
+            _charge(sub_litellm, _in, _out, label="sub_agent")
+            if sub_cp is not None:
+                sub_cp.tokens_used += _in + _out
+                sub_cp.record("assistant", in_tok=_in, out_tok=_out)
+                sub_cp.step(messages + [{"role": "assistant", "content": result_text}],
+                            "completed", in_tok=_in, out_tok=_out)
+            return result_text
+        except Exception as exc:
+            return f"[sub_agent error] {type(exc).__name__}: {exc}"
+
+    # Full agentic loop with tools
+    last_response = ""
+    for _turn in range(max_turns):
+        await _rate_limit_wait()
+        try:
+            response = await litellm.acompletion(
+                model=sub_litellm,
+                messages=_trim_messages(messages),
+                tools=sub_tool_defs,
+                max_tokens=max_tokens,
+                temperature=TEMP,
+                num_retries=2,
+            )
+        except Exception as exc:
+            return f"[sub_agent error] {type(exc).__name__}: {exc}"
+
+        choice = response.choices[0]
+        msg = choice.message
+        _in = (getattr(response.usage, "prompt_tokens", 0) or 0) if response.usage else 0
+        _out = (getattr(response.usage, "completion_tokens", 0) or 0) if response.usage else 0
+        _charge(sub_litellm, _in, _out, label="sub_agent")
+        if sub_cp is not None:
+            sub_cp.tokens_used += _in + _out
+
+        _assistant_msg: dict = {
+            "role": "assistant",
+            "content": msg.content,
+            "tool_calls": [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in (msg.tool_calls or [])
+            ] or None,
+        }
+        messages.append(_assistant_msg)
+        if sub_cp is not None:
+            sub_cp.record("assistant", in_tok=_in, out_tok=_out)
+            sub_cp.step(messages, "in_progress", in_tok=_in, out_tok=_out)
+
+        # Done — no tool calls
+        if choice.finish_reason in ("stop", "end_turn") or not msg.tool_calls:
+            last_response = msg.content or ""
+            if sub_cp is not None:
+                sub_cp.step(messages, "completed", in_tok=_in, out_tok=_out)
+            return last_response
+
+        if msg.content:
+            print(f"[sub:{label or 'sub'}] {msg.content[:120]}", flush=True)
+
+        # Execute tool calls
+        for tc in (msg.tool_calls or []):
+            fn_name = tc.function.name
+            try:
+                fn_args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                fn_args = {}
+
+            print(f"[sub:{label or 'sub'}] ⚡ {fn_name}({json.dumps(fn_args, ensure_ascii=False)[:150]})", flush=True)
+            _tool_t0 = time.perf_counter()
+
+            if fn_name in sub_sessions:
+                # MCP tool
+                try:
+                    result = await asyncio.wait_for(
+                        sub_sessions[fn_name].call_tool(fn_name, fn_args),
+                        timeout=TOOL_TIMEOUT,
+                    )
+                    result_str = _extract_text(result.content)
+                except asyncio.TimeoutError:
+                    result_str = f"Tool '{fn_name}' timed out after {TOOL_TIMEOUT}s"
+                except BaseException as exc:
+                    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                        raise
+                    result_str = f"Tool error: {type(exc).__name__}: {exc}"
+{% if has_composio_tools %}
+            elif fn_name in composio_tool_names and composio_toolset is not None:
+                result_str, _ = _run_composio_tool(composio_toolset, fn_name, fn_args)
+{% endif %}
+{% if has_local_tools %}
+            elif fn_name in _local_tool_registry.names():
+                try:
+                    _ltd = _local_tool_registry.get(fn_name)
+                    _local_result = _ltd.call(**fn_args)
+                    result_str = str(_local_result) if _local_result is not None else "(done)"
+                except Exception as _le:
+                    result_str = f"Tool error: {type(_le).__name__}: {_le}"
+{% endif %}
+{% if has_any_builtin %}
+            elif fn_name in _BUILTIN_TOOL_NAMES and fn_name not in _SUBAGENT_BLOCKED_TOOLS:
+                try:
+                    result_str = _exec_builtin_tool(fn_name, fn_args)
+                except Exception as _be:
+                    result_str = f"Tool error: {type(_be).__name__}: {_be}"
+{% endif %}
+            else:
+                result_str = f"Error: tool '{fn_name}' is not available to sub-agents."
+
+            _tool_dur_ms = int((time.perf_counter() - _tool_t0) * 1000)
+            # Sanitize for LiteLLM
+            result_str = result_str.encode("utf-8", "replace").decode("utf-8")
+            if not result_str.isascii():
+                result_str = result_str.encode("ascii", "backslashreplace").decode("ascii")
+
+            _dur_str = f"{_tool_dur_ms}ms" if _tool_dur_ms < 1000 else f"{_tool_dur_ms / 1000:.1f}s"
+            print(f"[sub:{label or 'sub'}] ← {fn_name} ({_dur_str}): {result_str[:200].replace(chr(10), ' ')}", flush=True)
+
+            _tool_result: dict = {"role": "tool", "tool_call_id": tc.id, "content": result_str}
+            messages.append(_tool_result)
+            if sub_cp is not None:
+                sub_cp.record("tool", duration_ms=_tool_dur_ms)
+
+        if sub_cp is not None:
+            sub_cp.step(messages, "in_progress")
+
+    # Exhausted turns
+    if sub_cp is not None:
+        sub_cp.step(messages, "completed")
+    return last_response or f"[sub_agent] Reached max turns ({max_turns})"
+{% endif %}
