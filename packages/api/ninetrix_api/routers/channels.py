@@ -52,6 +52,14 @@ class BindAgentPayload(BaseModel):
     command: str | None = None   # "/search", "/support"
 
 
+class SyncSessionPayload(BaseModel):
+    channel_type: str        # "telegram", "whatsapp"
+    external_chat_id: str
+    external_user_id: str = ""
+    agent_name: str
+    thread_id: str
+
+
 # ── Channel CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("")
@@ -329,6 +337,54 @@ async def telegram_webhook(request: Request):
         )
 
     return {"ok": True, "run_id": run_id, "thread_id": thread_id}
+
+
+# ── Session sync (called by CLI bridge) ──────────────────────────────────────
+
+@router.post("/sessions/sync")
+async def sync_session(payload: SyncSessionPayload):
+    """Upsert a channel_sessions row so the CLI bridge's sessions appear in the dashboard.
+
+    Called by the CLI ChannelBridge after each successful message dispatch.
+    If no matching channel exists in the DB, creates a minimal one.
+    """
+    pool = db.pool()
+
+    # Find or create the channel
+    ch = await pool.fetchrow(
+        "SELECT id FROM channels WHERE channel_type = $1 AND verified = TRUE LIMIT 1",
+        payload.channel_type,
+    )
+    if not ch:
+        # Auto-create a minimal channel record so sessions have a parent
+        ch_id = str(uuid.uuid4())
+        await pool.execute(
+            """
+            INSERT INTO channels (id, channel_type, name, config, session_mode, routing_mode, verified, enabled)
+            VALUES ($1, $2, $3, '{}'::jsonb, 'per_chat', 'single', TRUE, TRUE)
+            ON CONFLICT DO NOTHING
+            """,
+            ch_id, payload.channel_type, f"{payload.channel_type} (auto)",
+        )
+        channel_id = ch_id
+    else:
+        channel_id = str(ch["id"])
+
+    # Upsert session
+    await pool.execute(
+        """
+        INSERT INTO channel_sessions
+            (channel_id, external_chat_id, external_user_id, agent_name, thread_id)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (channel_id, external_chat_id, agent_name) DO UPDATE
+            SET last_message_at = NOW(),
+                external_user_id = COALESCE(NULLIF($3, ''), channel_sessions.external_user_id)
+        """,
+        channel_id, payload.external_chat_id, payload.external_user_id,
+        payload.agent_name, payload.thread_id,
+    )
+
+    return {"ok": True}
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────

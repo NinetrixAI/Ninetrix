@@ -140,6 +140,44 @@ class AgentStats(BaseModel):
     last_heartbeat: datetime | None = None
 
 
+# ── Sessions ──────────────────────────────────────────────────────────────────
+
+class SessionSummary(BaseModel):
+    session_id: str          # external_chat_id or parent thread_id
+    session_type: str        # "channel" | "multi_agent" | "standalone"
+    label: str               # display name (e.g. "Telegram #12345" or agent name)
+    thread_ids: list[str]
+    agent_ids: list[str]
+    total_runs: int
+    total_tokens: int
+    total_cost_usd: float
+    last_active: datetime
+    first_active: datetime
+
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+class DailyStats(BaseModel):
+    date: str            # YYYY-MM-DD
+    runs: int
+    completed: int
+    errors: int
+    tokens: int
+    cost_usd: float
+    avg_duration_ms: float | None = None
+    p95_duration_ms: float | None = None
+
+class AnalyticsSummary(BaseModel):
+    days: list[DailyStats]
+    total_runs: int
+    total_tokens: int
+    total_cost_usd: float
+    avg_duration_ms: float | None = None
+    error_rate: float          # 0.0–1.0
+    top_agents: list[dict]     # [{agent_id, runs, tokens, cost_usd}]
+    top_models: list[dict]     # [{model, runs, tokens, cost_usd}]
+
+
 # ── Organization tokens ────────────────────────────────────────────────────────
 
 class OrgToken(BaseModel):

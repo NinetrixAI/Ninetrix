@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import Link from "next/link";
 import {
   listThreads,
+  listSessions,
   listAgents,
   listApprovals,
   listChannels,
@@ -10,6 +12,7 @@ import {
   checkApiStatus,
   subscribeThreadStream,
   type ThreadSummary,
+  type SessionSummary,
   type AgentStats,
   type ApiStatus,
   type ApprovalItem,
@@ -43,6 +46,14 @@ const STATUS_TABS = [
   { key: "pending",   label: "Pending" },
 ];
 
+// Map UI tab keys to API status values
+const STATUS_TO_API: Record<string, string> = {
+  running: "in_progress",
+  completed: "completed",
+  error: "error",
+  pending: "waiting_for_approval",
+};
+
 /* ── Page ────────────────────────────────────────────────────────────────── */
 
 export default function RunsPage() {
@@ -68,14 +79,34 @@ export default function RunsPage() {
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
 
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [viewMode, setViewMode] = useState<"runs" | "sessions">("runs");
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [expandedSession, setExpandedSession] = useState<string | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sseCleanupRef = useRef<(() => void) | null>(null);
 
+  // Debounced search value — avoids API call on every keystroke
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Reset to first page when filters change
+  useEffect(() => { setOffset(0); }, [debouncedSearch, statusFilter]);
+
   /* ── Data fetching ─────────────────────────────────────────────────────── */
   const fetchThreads = useCallback(async () => {
     try {
-      const data = await listThreads({ limit: PAGE_SIZE, offset });
+      const apiStatus = statusFilter !== "all" ? (STATUS_TO_API[statusFilter] ?? statusFilter) : undefined;
+      const data = await listThreads({
+        limit: PAGE_SIZE,
+        offset,
+        search: debouncedSearch || undefined,
+        status: apiStatus,
+      });
       setThreads(data.items ?? []);
       setTotal(data.total ?? 0);
       setError(null);
@@ -84,7 +115,7 @@ export default function RunsPage() {
     } finally {
       setLoading(false);
     }
-  }, [offset]);
+  }, [offset, debouncedSearch, statusFilter]);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -103,6 +134,19 @@ export default function RunsPage() {
       setApprovals(items);
     } catch { /* approvals endpoint may not exist on older APIs */ }
   }, []);
+
+  const fetchSessions = useCallback(async () => {
+    setSessionsLoading(true);
+    try {
+      const items = await listSessions();
+      setSessions(items);
+    } catch { /* sessions may not be available */ }
+    finally { setSessionsLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (viewMode === "sessions") fetchSessions();
+  }, [viewMode, fetchSessions]);
 
   const fetchChannels = useCallback(async () => {
     try {
@@ -188,29 +232,15 @@ export default function RunsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
-  /* ── Filtering ─────────────────────────────────────────────────────────── */
-  const filtered = useMemo(() => {
-    return threads.filter((t) => {
-      const q = search.toLowerCase();
-      const matchSearch = !q ||
-        t.thread_id.toLowerCase().includes(q) ||
-        t.agent_id.toLowerCase().includes(q) ||
-        (t.agent_name ?? "").toLowerCase().includes(q) ||
-        t.model.toLowerCase().includes(q);
-      const norm = normalizeStatus(t.status);
-      const matchStatus = statusFilter === "all" || norm === statusFilter;
-      return matchSearch && matchStatus;
-    });
-  }, [threads, search, statusFilter]);
-
+  /* ── Status counts (from current page for tab badges) ─────────────────── */
   const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: threads.length };
+    const counts: Record<string, number> = { all: total };
     for (const t of threads) {
       const n = normalizeStatus(t.status);
       counts[n] = (counts[n] ?? 0) + 1;
     }
     return counts;
-  }, [threads]);
+  }, [threads, total]);
 
   /* ── Stats ─────────────────────────────────────────────────────────────── */
   const stats = useMemo(() => {
@@ -307,18 +337,38 @@ export default function RunsPage() {
         >
           <div className="flex items-start justify-between">
             <div>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: 22,
-                  fontWeight: 700,
-                  color: "var(--text)",
-                  letterSpacing: "-0.03em",
-                  lineHeight: 1.2,
-                }}
-              >
-                Runs
-              </h1>
+              <div className="flex items-center gap-3">
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: 22,
+                    fontWeight: 700,
+                    color: "var(--text)",
+                    letterSpacing: "-0.03em",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  Runs
+                </h1>
+                <div className="flex items-center gap-1" style={{ background: "var(--bg-raised)", borderRadius: 6, padding: 2 }}>
+                  {(["runs", "sessions"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setViewMode(m)}
+                      className="cursor-pointer"
+                      style={{
+                        padding: "3px 10px", borderRadius: 4, border: "none",
+                        fontSize: 11.5, fontWeight: viewMode === m ? 500 : 400,
+                        background: viewMode === m ? "var(--bg-surface)" : "transparent",
+                        color: viewMode === m ? "var(--text)" : "var(--text-muted)",
+                        boxShadow: viewMode === m ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                      }}
+                    >
+                      {m === "runs" ? "All Runs" : "Sessions"}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <p
                 style={{
                   margin: "4px 0 0",
@@ -394,14 +444,25 @@ export default function RunsPage() {
 
             {/* Search */}
             <div className="relative">
-              <svg
-                className="absolute pointer-events-none"
-                style={{ left: 10, top: "50%", transform: "translateY(-50%)", opacity: 0.3 }}
-                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-              >
-                <circle cx="11" cy="11" r="8" />
-                <path d="m21 21-4.3-4.3" />
-              </svg>
+              {/* Left icon: spinner while debouncing, magnifier otherwise */}
+              {search && search !== debouncedSearch ? (
+                <svg
+                  className="absolute pointer-events-none"
+                  style={{ left: 10, top: "50%", transform: "translateY(-50%)", opacity: 0.4, animation: "spin 0.8s linear infinite" }}
+                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                >
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              ) : (
+                <svg
+                  className="absolute pointer-events-none"
+                  style={{ left: 10, top: "50%", transform: "translateY(-50%)", opacity: 0.3 }}
+                  width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                >
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+              )}
               <input
                 type="text"
                 placeholder="Search runs..."
@@ -411,7 +472,7 @@ export default function RunsPage() {
                 style={{
                   width: 220,
                   height: 32,
-                  padding: "0 10px 0 30px",
+                  padding: "0 30px",
                   borderRadius: 6,
                   border: "1px solid var(--border)",
                   background: "var(--bg-surface)",
@@ -420,12 +481,131 @@ export default function RunsPage() {
                   fontFamily: "inherit",
                 }}
               />
+              {/* Clear button */}
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute cursor-pointer inline-flex items-center justify-center"
+                  style={{
+                    right: 6, top: "50%", transform: "translateY(-50%)",
+                    width: 18, height: 18, borderRadius: 4,
+                    background: "transparent", border: "none",
+                    color: "var(--text-muted)", fontSize: 14,
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--text)"; e.currentTarget.style.background = "var(--bg-raised)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.background = "transparent"; }}
+                >
+                  &times;
+                </button>
+              )}
             </div>
           </div>
         </header>
 
-        {/* Table */}
-        <div>
+        {/* Sessions view */}
+        {viewMode === "sessions" && (
+          <div style={{ padding: "16px 32px" }}>
+            {sessionsLoading && (
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="skeleton" style={{ height: 60, borderRadius: 8 }} />
+                ))}
+              </div>
+            )}
+            {!sessionsLoading && sessions.length === 0 && (
+              <div className="flex items-center justify-center" style={{ padding: 48, color: "var(--text-muted)", fontSize: 13 }}>
+                No sessions found. Sessions are created from channel conversations and multi-agent workflows.
+              </div>
+            )}
+            {!sessionsLoading && sessions.length > 0 && (
+              <div className="flex flex-col gap-2">
+                {sessions.map((s) => {
+                  const isExpanded = expandedSession === s.session_id;
+                  return (
+                    <div
+                      key={s.session_id}
+                      style={{
+                        background: "var(--bg-surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <button
+                        onClick={() => setExpandedSession(isExpanded ? null : s.session_id)}
+                        className="flex items-center w-full cursor-pointer"
+                        style={{
+                          padding: "12px 16px",
+                          background: "transparent",
+                          border: "none",
+                          textAlign: "left",
+                        }}
+                      >
+                        {/* Type badge */}
+                        <span
+                          style={{
+                            fontSize: 9.5, fontWeight: 600, letterSpacing: "0.06em",
+                            padding: "2px 7px", borderRadius: 4, marginRight: 10, flexShrink: 0,
+                            background: s.session_type === "channel" ? "var(--blue-dim)" : "var(--purple-dim, rgba(167,139,250,0.12))",
+                            color: s.session_type === "channel" ? "var(--blue)" : "var(--purple)",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {s.session_type === "channel" ? "Channel" : "Multi-Agent"}
+                        </span>
+                        {/* Label */}
+                        <span style={{ fontSize: 13, fontFamily: "var(--font-mono)", fontWeight: 500, color: "var(--text)", marginRight: 10 }}>
+                          {s.label}
+                        </span>
+                        {/* Agents */}
+                        <span style={{ fontSize: 11, color: "var(--text-dim)", marginRight: 10 }}>
+                          {s.agent_ids.join(", ")}
+                        </span>
+                        {/* Stats */}
+                        <div className="flex items-center gap-4 ml-auto" style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-dim)", flexShrink: 0 }}>
+                          <span>{s.total_runs} run{s.total_runs !== 1 ? "s" : ""}</span>
+                          <span>{formatTokens(s.total_tokens)}t</span>
+                          {s.total_cost_usd > 0 && <span>{formatCost(s.total_cost_usd)}</span>}
+                          <span>{formatRelTime(s.last_active)}</span>
+                          <span style={{ fontSize: 12, color: "var(--text-muted)", transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
+                            &#x25BC;
+                          </span>
+                        </div>
+                      </button>
+                      {/* Expanded thread list */}
+                      {isExpanded && (
+                        <div style={{ borderTop: "1px solid var(--border)", padding: "8px 16px" }}>
+                          {s.thread_ids.map((tid) => (
+                            <Link
+                              key={tid}
+                              href={`/runs/detail?thread_id=${encodeURIComponent(tid)}`}
+                              className="flex items-center gap-3 no-underline transition-colors"
+                              style={{ padding: "6px 8px", borderRadius: 4, color: "var(--text-secondary)" }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                            >
+                              <span style={{ fontSize: 11.5, fontFamily: "var(--font-mono)" }}>
+                                {tid.length > 20 ? `${tid.slice(0, 8)}…${tid.slice(-6)}` : tid}
+                              </span>
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ opacity: 0.4, flexShrink: 0 }}>
+                                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                                <polyline points="15 3 21 3 21 9" />
+                                <line x1="10" y1="14" x2="21" y2="3" />
+                              </svg>
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Runs table */}
+        {viewMode === "runs" && <div>
           {loading && (
             <div style={{ padding: "16px 32px" }} className="flex flex-col gap-2">
               {Array.from({ length: 8 }).map((_, i) => (
@@ -457,7 +637,7 @@ export default function RunsPage() {
             </div>
           )}
 
-          {!loading && !error && filtered.length === 0 && (
+          {!loading && !error && threads.length === 0 && (
             <div
               className="flex flex-col items-center justify-center"
               style={{ padding: "80px 32px", color: "var(--text-muted)" }}
@@ -486,7 +666,7 @@ export default function RunsPage() {
             </div>
           )}
 
-          {!loading && !error && filtered.length > 0 && (
+          {!loading && !error && threads.length > 0 && (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -514,7 +694,7 @@ export default function RunsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((t) => {
+                {threads.map((t) => {
                   const isSelected = selectedId === t.thread_id;
                   return (
                     <React.Fragment key={t.thread_id}>
@@ -650,10 +830,10 @@ export default function RunsPage() {
 
                         {/* Open detail */}
                         <td style={{ padding: "10px 8px", textAlign: "center" }}>
-                          <a
-                            href="#"
-                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedId(selectedId === t.thread_id ? null : t.thread_id); }}
-                            title="Open trace view"
+                          <Link
+                            href={`/runs/detail?thread_id=${encodeURIComponent(t.thread_id)}`}
+                            onClick={(e) => { e.stopPropagation(); }}
+                            title="Open full trace view"
                             className="inline-flex items-center justify-center transition-colors no-underline"
                             style={{
                               width: 28,
@@ -677,7 +857,7 @@ export default function RunsPage() {
                               <polyline points="15 3 21 3 21 9" />
                               <line x1="10" y1="14" x2="21" y2="3" />
                             </svg>
-                          </a>
+                          </Link>
                         </td>
                       </tr>
 
@@ -763,7 +943,7 @@ export default function RunsPage() {
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </main>
     </div>
   );

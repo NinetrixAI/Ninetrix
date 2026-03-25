@@ -68,6 +68,41 @@ export interface Page<T> {
   offset: number;
 }
 
+export interface DailyStats {
+  date: string;
+  runs: number;
+  completed: number;
+  errors: number;
+  tokens: number;
+  cost_usd: number;
+  avg_duration_ms: number | null;
+  p95_duration_ms: number | null;
+}
+
+export interface AnalyticsSummary {
+  days: DailyStats[];
+  total_runs: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  avg_duration_ms: number | null;
+  error_rate: number;
+  top_agents: Array<{ agent_id: string; runs: number; tokens: number; cost_usd: number }>;
+  top_models: Array<{ model: string; runs: number; tokens: number; cost_usd: number }>;
+}
+
+export interface SessionSummary {
+  session_id: string;
+  session_type: "channel" | "multi_agent" | "standalone";
+  label: string;
+  thread_ids: string[];
+  agent_ids: string[];
+  total_runs: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  last_active: string;
+  first_active: string;
+}
+
 export interface ApiStatus {
   connected: boolean;
   latencyMs?: number;
@@ -142,14 +177,28 @@ export async function checkApiStatus(): Promise<ApiStatus> {
 
 export async function listThreads(opts?: {
   status?: string;
+  search?: string;
+  agent_id?: string;
+  model?: string;
   limit?: number;
   offset?: number;
 }): Promise<Page<ThreadSummary>> {
   const params = new URLSearchParams({ sort: "started_at", order: "desc" });
   if (opts?.status) params.set("status", opts.status);
+  if (opts?.search) params.set("search", opts.search);
+  if (opts?.agent_id) params.set("agent_id", opts.agent_id);
+  if (opts?.model) params.set("model", opts.model);
   if (opts?.limit != null) params.set("limit", String(opts.limit));
   if (opts?.offset != null) params.set("offset", String(opts.offset));
   return apiFetch<Page<ThreadSummary>>(`/threads?${params}`);
+}
+
+export async function listSessions(): Promise<SessionSummary[]> {
+  return apiFetch<SessionSummary[]>("/threads/sessions");
+}
+
+export async function getAnalytics(days: number = 30): Promise<AnalyticsSummary> {
+  return apiFetch<AnalyticsSummary>(`/threads/analytics?days=${days}`);
 }
 
 export async function getThreadTimeline(threadId: string): Promise<TimelineEvent[]> {

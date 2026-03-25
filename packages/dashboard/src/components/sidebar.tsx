@@ -11,9 +11,20 @@ import ThemeToggle from "@/components/theme-toggle";
 import { CreateChannelDialog, ManageChannelDialog } from "@/components/channel-dialog";
 
 const NAV_ITEMS = [
-  { label: "Runs",   href: "/runs",   icon: RunsIcon },
-  { label: "Agents", href: "/agents", icon: AgentsIcon },
+  { label: "Runs",      href: "/runs",      icon: RunsIcon },
+  { label: "Analytics", href: "/analytics", icon: AnalyticsIcon },
+  { label: "Agents",    href: "/agents",    icon: AgentsIcon },
 ];
+
+function AnalyticsIcon({ active }: { active: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <rect x="2" y="9" width="3" height="5" rx="0.5" fill={active ? "#A78BFA" : "currentColor"} opacity={active ? 1 : 0.5} />
+      <rect x="6.5" y="5" width="3" height="9" rx="0.5" fill={active ? "#A78BFA" : "currentColor"} opacity={active ? 0.8 : 0.4} />
+      <rect x="11" y="2" width="3" height="12" rx="0.5" fill={active ? "#A78BFA" : "currentColor"} opacity={active ? 0.6 : 0.3} />
+    </svg>
+  );
+}
 
 function RunsIcon({ active }: { active: boolean }) {
   return (

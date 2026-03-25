@@ -197,6 +197,28 @@ class ChannelBridge:
         for chunk in _split_message(answer, max_len=4000):
             _send_tg(bot_token, chat_id, chunk)
 
+        # Sync session to local API so dashboard shows it in Sessions view
+        self._sync_session(chat_id, username)
+
+    def _sync_session(self, chat_id: str, username: str) -> None:
+        """Notify the local API about this channel session (fire-and-forget)."""
+        import os
+        api_url = os.environ.get("AGENTFILE_API_URL", "http://localhost:8000")
+        try:
+            httpx.post(
+                f"{api_url}/v1/channels/sessions/sync",
+                json={
+                    "channel_type": "telegram",
+                    "external_chat_id": chat_id,
+                    "external_user_id": username,
+                    "agent_name": self._agent_name,
+                    "thread_id": f"chat-{chat_id}",
+                },
+                timeout=5,
+            )
+        except Exception:
+            logger.debug("Session sync failed (non-critical)", exc_info=True)
+
 
 def _split_message(text: str, max_len: int = 4000) -> list[str]:
     """Split a long message into chunks that fit Telegram's 4096 char limit."""

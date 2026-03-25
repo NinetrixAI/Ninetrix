@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ninetrix_api import db
-from ninetrix_api.models import AgentSummary, LogEntry, Page, ThreadDetail, ThreadSummary, TimelineEvent
+from ninetrix_api.models import AgentSummary, AnalyticsSummary, DailyStats, LogEntry, Page, SessionSummary, ThreadDetail, ThreadSummary, TimelineEvent
 
 router = APIRouter()
 
@@ -87,11 +87,14 @@ _VALID_STATUSES = {
 
 @router.get("", response_model=Page[ThreadSummary])
 async def list_threads(
-    sort:   str        = "updated_at",
-    order:  str        = "desc",
-    status: str | None = None,
-    limit:  int        = 50,
-    offset: int        = 0,
+    sort:     str        = "updated_at",
+    order:    str        = "desc",
+    status:   str | None = None,
+    search:   str | None = None,
+    agent_id: str | None = None,
+    model:    str | None = None,
+    limit:    int        = 50,
+    offset:   int        = 0,
 ):
     """Return a paginated page of latest checkpoints per thread.
 
@@ -99,6 +102,9 @@ async def list_threads(
     - **sort**: `updated_at` (default) | `started_at` | `step_index` | `tokens_used` | `agent_id` | `status`
     - **order**: `desc` (default) | `asc`
     - **status**: filter by exact status value (e.g. `in_progress`, `completed`, `error`)
+    - **search**: case-insensitive substring match across thread_id, agent_id, and model
+    - **agent_id**: filter by exact agent_id
+    - **model**: filter by exact model name
     - **limit**: page size, 1–200 (default 50)
     - **offset**: row offset (default 0)
     """
@@ -108,6 +114,9 @@ async def list_threads(
     offset = max(0, offset)
 
     status_filter = status if status in _VALID_STATUSES else None
+    search_pattern = f"%{search}%" if search and search.strip() else None
+    agent_filter = agent_id if agent_id and agent_id.strip() else None
+    model_filter = model if model and model.strip() else None
 
     q = f"""
         SELECT *, COUNT(*) OVER() AS total_count
@@ -145,10 +154,13 @@ async def list_threads(
             WHERE c2.thread_id = latest.thread_id
         ) agg ON true
         WHERE ($1::text IS NULL OR status = $1)
+          AND ($4::text IS NULL OR (thread_id ILIKE $4 OR agent_id ILIKE $4 OR model ILIKE $4))
+          AND ($5::text IS NULL OR agent_id = $5)
+          AND ($6::text IS NULL OR model = $6)
         ORDER BY {col} {dir_}
         LIMIT $2 OFFSET $3
     """
-    rows = await db.pool().fetch(q, status_filter, limit, offset)
+    rows = await db.pool().fetch(q, status_filter, limit, offset, search_pattern, agent_filter, model_filter)
     total = int(rows[0]["total_count"]) if rows else 0
     result = []
     for r in rows:
@@ -180,6 +192,291 @@ async def list_threads(
             rate_limit_waits=int(r["rate_limit_waits"] or 0),
         ))
     return Page(items=result, total=total, limit=limit, offset=offset)
+
+
+@router.get("/analytics", response_model=AnalyticsSummary)
+async def get_analytics(days: int = 30):
+    """Aggregated analytics: daily stats, top agents, top models.
+
+    Query params:
+    - **days**: number of days to look back (default 30, max 90)
+    """
+    days = max(1, min(days, 90))
+
+    # Daily stats — one row per day with run counts, tokens, cost, durations
+    daily_q = """
+        WITH latest_per_thread AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id, status, timestamp AS updated_at,
+                COALESCE((metadata->>'tokens_used')::bigint, 0) AS tokens_used,
+                COALESCE((metadata->>'run_cost_usd')::float, 0) AS run_cost_usd
+            FROM agentfile_checkpoints
+            WHERE timestamp >= NOW() - make_interval(days => $1)
+            ORDER BY thread_id, step_index DESC
+        ),
+        with_started AS (
+            SELECT l.*,
+                   (SELECT MIN(timestamp) FROM agentfile_checkpoints c2 WHERE c2.thread_id = l.thread_id) AS started_at
+            FROM latest_per_thread l
+        )
+        SELECT
+            (started_at AT TIME ZONE 'UTC')::date AS day,
+            COUNT(*)::int AS runs,
+            COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+            COUNT(*) FILTER (WHERE status = 'error')::int AS errors,
+            COALESCE(SUM(tokens_used), 0)::bigint AS tokens,
+            COALESCE(SUM(run_cost_usd), 0)::float AS cost_usd,
+            AVG(EXTRACT(EPOCH FROM (updated_at - started_at)) * 1000)
+                FILTER (WHERE updated_at > started_at)::float AS avg_duration_ms,
+            PERCENTILE_CONT(0.95) WITHIN GROUP (
+                ORDER BY EXTRACT(EPOCH FROM (updated_at - started_at)) * 1000
+            ) FILTER (WHERE updated_at > started_at)::float AS p95_duration_ms
+        FROM with_started
+        GROUP BY day
+        ORDER BY day ASC
+    """
+    daily_rows = await db.pool().fetch(daily_q, days)
+
+    daily = [
+        DailyStats(
+            date=str(r["day"]),
+            runs=r["runs"],
+            completed=r["completed"],
+            errors=r["errors"],
+            tokens=int(r["tokens"]),
+            cost_usd=float(r["cost_usd"]),
+            avg_duration_ms=float(r["avg_duration_ms"]) if r["avg_duration_ms"] else None,
+            p95_duration_ms=float(r["p95_duration_ms"]) if r["p95_duration_ms"] else None,
+        )
+        for r in daily_rows
+    ]
+
+    total_runs = sum(d.runs for d in daily)
+    total_tokens = sum(d.tokens for d in daily)
+    total_cost = sum(d.cost_usd for d in daily)
+    total_errors = sum(d.errors for d in daily)
+    error_rate = total_errors / total_runs if total_runs > 0 else 0.0
+    all_durations = [d.avg_duration_ms for d in daily if d.avg_duration_ms]
+    avg_duration = sum(all_durations) / len(all_durations) if all_durations else None
+
+    # Top agents
+    agent_q = """
+        WITH latest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id, agent_id,
+                COALESCE((metadata->>'tokens_used')::bigint, 0) AS tokens_used,
+                COALESCE((metadata->>'run_cost_usd')::float, 0) AS run_cost_usd
+            FROM agentfile_checkpoints
+            WHERE timestamp >= NOW() - make_interval(days => $1)
+            ORDER BY thread_id, step_index DESC
+        )
+        SELECT agent_id,
+               COUNT(*)::int AS runs,
+               COALESCE(SUM(tokens_used), 0)::bigint AS tokens,
+               COALESCE(SUM(run_cost_usd), 0)::float AS cost_usd
+        FROM latest
+        GROUP BY agent_id
+        ORDER BY runs DESC
+        LIMIT 10
+    """
+    agent_rows = await db.pool().fetch(agent_q, days)
+    top_agents = [
+        {"agent_id": r["agent_id"], "runs": r["runs"], "tokens": int(r["tokens"]), "cost_usd": float(r["cost_usd"])}
+        for r in agent_rows
+    ]
+
+    # Top models
+    model_q = """
+        WITH latest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id,
+                metadata->>'model' AS model,
+                COALESCE((metadata->>'tokens_used')::bigint, 0) AS tokens_used,
+                COALESCE((metadata->>'run_cost_usd')::float, 0) AS run_cost_usd
+            FROM agentfile_checkpoints
+            WHERE timestamp >= NOW() - make_interval(days => $1)
+            ORDER BY thread_id, step_index DESC
+        )
+        SELECT COALESCE(model, 'unknown') AS model,
+               COUNT(*)::int AS runs,
+               COALESCE(SUM(tokens_used), 0)::bigint AS tokens,
+               COALESCE(SUM(run_cost_usd), 0)::float AS cost_usd
+        FROM latest
+        GROUP BY model
+        ORDER BY runs DESC
+        LIMIT 10
+    """
+    model_rows = await db.pool().fetch(model_q, days)
+    top_models = [
+        {"model": r["model"], "runs": r["runs"], "tokens": int(r["tokens"]), "cost_usd": float(r["cost_usd"])}
+        for r in model_rows
+    ]
+
+    return AnalyticsSummary(
+        days=daily,
+        total_runs=total_runs,
+        total_tokens=total_tokens,
+        total_cost_usd=total_cost,
+        avg_duration_ms=avg_duration,
+        error_rate=error_rate,
+        top_agents=top_agents,
+        top_models=top_models,
+    )
+
+
+@router.get("/sessions", response_model=list[SessionSummary])
+async def list_sessions(limit: int = 50, offset: int = 0):
+    """Return conversations grouped by channel chat or multi-agent parent.
+
+    Groups runs into sessions using:
+    1. channel_sessions.external_chat_id — multi-message channel conversations
+    2. parent_trace_id — multi-agent orchestration chains
+    Remaining runs appear as standalone sessions.
+    """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    # 1. Channel-based sessions (from channel_sessions table)
+    channel_q = """
+        SELECT
+            cs.external_chat_id AS session_id,
+            ch.channel_type,
+            ch.name AS channel_name,
+            array_agg(DISTINCT cs.thread_id) AS thread_ids,
+            array_agg(DISTINCT cs.agent_name) AS agent_ids,
+            COUNT(DISTINCT cs.thread_id)::int AS total_runs,
+            MAX(cs.last_message_at) AS last_active,
+            MIN(cs.created_at) AS first_active
+        FROM channel_sessions cs
+        JOIN channels ch ON ch.id = cs.channel_id
+        GROUP BY cs.external_chat_id, ch.channel_type, ch.name
+        ORDER BY last_active DESC
+        LIMIT $1 OFFSET $2
+    """
+    ch_rows = await db.pool().fetch(channel_q, limit, offset)
+
+    sessions: list[SessionSummary] = []
+    seen_threads: set[str] = set()
+
+    for r in ch_rows:
+        tids = list(r["thread_ids"] or [])
+        seen_threads.update(tids)
+        # Fetch aggregated token/cost for these threads
+        stats = await _session_thread_stats(tids)
+        ch_type = r["channel_type"] or "channel"
+        ch_name = r["channel_name"] or ch_type
+        sessions.append(SessionSummary(
+            session_id=r["session_id"],
+            session_type="channel",
+            label=f"{ch_name} #{r['session_id'][-6:]}",
+            thread_ids=tids,
+            agent_ids=list(r["agent_ids"] or []),
+            total_runs=r["total_runs"],
+            total_tokens=stats["tokens"],
+            total_cost_usd=stats["cost"],
+            last_active=r["last_active"],
+            first_active=r["first_active"],
+        ))
+
+    # 2a. Multi-agent sessions — threads that share a parent_trace_id (cross-thread handoffs)
+    parent_q = """
+        SELECT
+            parent_trace_id AS session_id,
+            array_agg(DISTINCT thread_id) AS thread_ids,
+            array_agg(DISTINCT agent_id) AS agent_ids,
+            COUNT(DISTINCT thread_id)::int AS total_runs,
+            MAX(timestamp) AS last_active,
+            MIN(timestamp) AS first_active
+        FROM agentfile_checkpoints
+        WHERE parent_trace_id IS NOT NULL
+          AND parent_trace_id != ''
+        GROUP BY parent_trace_id
+        HAVING COUNT(DISTINCT thread_id) > 1
+        ORDER BY last_active DESC
+        LIMIT $1
+    """
+    parent_rows = await db.pool().fetch(parent_q, limit)
+
+    for r in parent_rows:
+        tids = [t for t in (r["thread_ids"] or []) if t not in seen_threads]
+        if not tids:
+            continue
+        seen_threads.update(tids)
+        stats = await _session_thread_stats(tids)
+        agents = list(r["agent_ids"] or [])
+        sessions.append(SessionSummary(
+            session_id=r["session_id"],
+            session_type="multi_agent",
+            label=f"{agents[0] if agents else 'agent'} +{len(agents) - 1}" if len(agents) > 1 else (agents[0] if agents else "agents"),
+            thread_ids=tids,
+            agent_ids=agents,
+            total_runs=len(tids),
+            total_tokens=stats["tokens"],
+            total_cost_usd=stats["cost"],
+            last_active=r["last_active"],
+            first_active=r["first_active"],
+        ))
+
+    # 2b. Multi-agent sessions — single threads with multiple agents (in-thread handoffs)
+    multi_agent_q = """
+        SELECT
+            thread_id,
+            array_agg(DISTINCT agent_id ORDER BY agent_id) AS agent_ids,
+            COALESCE(MAX((metadata->>'tokens_used')::bigint), 0) AS tokens_used,
+            COALESCE(MAX((metadata->>'run_cost_usd')::float), 0) AS run_cost_usd,
+            MAX(timestamp) AS last_active,
+            MIN(timestamp) AS first_active
+        FROM agentfile_checkpoints
+        WHERE thread_id NOT IN (SELECT unnest($2::text[]))
+        GROUP BY thread_id
+        HAVING COUNT(DISTINCT agent_id) > 1
+        ORDER BY last_active DESC
+        LIMIT $1
+    """
+    ma_rows = await db.pool().fetch(multi_agent_q, limit, list(seen_threads) or ["__none__"])
+
+    for r in ma_rows:
+        tid = r["thread_id"]
+        if tid in seen_threads:
+            continue
+        seen_threads.add(tid)
+        agents = list(r["agent_ids"] or [])
+        sessions.append(SessionSummary(
+            session_id=tid,
+            session_type="multi_agent",
+            label=f"{agents[0]} +{len(agents) - 1}" if len(agents) > 1 else agents[0],
+            thread_ids=[tid],
+            agent_ids=agents,
+            total_runs=1,
+            total_tokens=int(r["tokens_used"] or 0),
+            total_cost_usd=float(r["run_cost_usd"] or 0),
+            last_active=r["last_active"],
+            first_active=r["first_active"],
+        ))
+
+    # Sort by last_active descending
+    sessions.sort(key=lambda s: s.last_active, reverse=True)
+    return sessions[:limit]
+
+
+async def _session_thread_stats(thread_ids: list[str]) -> dict:
+    """Fetch aggregated tokens + cost for a set of thread_ids."""
+    if not thread_ids:
+        return {"tokens": 0, "cost": 0.0}
+    q = """
+        SELECT
+            COALESCE(SUM(DISTINCT (metadata->>'tokens_used')::bigint), 0) AS tokens,
+            COALESCE(SUM(DISTINCT (metadata->>'run_cost_usd')::float), 0) AS cost
+        FROM (
+            SELECT DISTINCT ON (thread_id)
+                thread_id, metadata
+            FROM agentfile_checkpoints
+            WHERE thread_id = ANY($1)
+            ORDER BY thread_id, step_index DESC
+        ) latest
+    """
+    row = await db.pool().fetchrow(q, thread_ids)
+    return {"tokens": int(row["tokens"] or 0), "cost": float(row["cost"] or 0)}
 
 
 @router.get("/{thread_id}", response_model=ThreadDetail)
@@ -351,7 +648,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
                 ts=ts, agent_id=agent_id, trace_id=trace_id,
                 parent_trace_id=parent_trace_id,
                 type="user_message", role="user",
-                content=text[:500],
+                content=text,
             ))
 
     elif role == "assistant":
@@ -367,7 +664,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
                             ts=ts, agent_id=agent_id, trace_id=trace_id,
                             parent_trace_id=parent_trace_id,
                             type="assistant_message", role="assistant",
-                            content=text[:500],
+                            content=text,
                             tokens_in=tokens_in,
                             tokens_out=tokens_out,
                             tokens_used=tokens_used,
@@ -379,7 +676,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
                     target_agent = None
                     if tool_name == "transfer_to_agent":
                         target_agent = args.get("agent", None)
-                    snippet = json.dumps(args)[:300] if args else ""
+                    snippet = json.dumps(args) if args else ""
                     events.append(dict(
                         ts=ts, agent_id=agent_id, trace_id=trace_id,
                         parent_trace_id=parent_trace_id,
@@ -398,7 +695,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
                 ts=ts, agent_id=agent_id, trace_id=trace_id,
                 parent_trace_id=parent_trace_id,
                 type="assistant_message", role="assistant",
-                content=content.strip()[:500],
+                content=content.strip(),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 tokens_used=tokens_used,
@@ -415,7 +712,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
             except (json.JSONDecodeError, TypeError):
                 args = {}
             target_agent = args.get("agent") if tool_name == "transfer_to_agent" else None
-            snippet = json.dumps(args)[:300] if args else ""
+            snippet = json.dumps(args) if args else ""
             events.append(dict(
                 ts=ts, agent_id=agent_id, trace_id=trace_id,
                 parent_trace_id=parent_trace_id,
@@ -440,7 +737,7 @@ def _msg_to_events(msg: dict, row: object, meta: dict | None = None, prev_meta: 
                 ts=ts, agent_id=agent_id, trace_id=trace_id,
                 parent_trace_id=parent_trace_id,
                 type="tool_result", role="tool",
-                content=text[:500],
+                content=text,
                 tool_name=resolved_tool_name,
                 duration_ms=duration_ms,
             ))
@@ -484,6 +781,17 @@ async def get_timeline(thread_id: str):
     agent_prev_len:  dict[str, int]  = {}
     agent_prev_meta: dict[str, dict] = {}  # last seen history_meta entry per agent
     events: list[dict] = []
+    seq = 0  # global sequence counter preserving history order across checkpoints
+
+    # Type priority for tiebreaking when events share the same timestamp.
+    # Lower = earlier. user_message must appear before the LLM response it triggered.
+    _TYPE_ORDER = {
+        "user_message": 0,
+        "thinking": 1,
+        "assistant_message": 2,
+        "tool_call": 3,
+        "tool_result": 4,
+    }
 
     for row in rows:
         snap = json.loads(row["checkpoint"]) if isinstance(row["checkpoint"], str) else dict(row["checkpoint"])
@@ -509,14 +817,27 @@ async def get_timeline(thread_id: str):
 
         prev_meta = agent_prev_meta.get(row["agent_id"], {})
         for msg, meta in zip(new_msgs, new_meta):
-            events.extend(_msg_to_events(msg, row, meta, prev_meta, tool_id_name))
+            new_evts = _msg_to_events(msg, row, meta, prev_meta, tool_id_name)
+            for evt in new_evts:
+                evt["_seq"] = seq
+                seq += 1
+            events.extend(new_evts)
             if meta.get("ts"):   # only advance prev when we have a real timestamp
                 prev_meta = meta
         agent_prev_meta[row["agent_id"]] = prev_meta
 
-    # Sort chronologically; stable sort preserves within-timestamp order
-    # (e.g. assistant_message before its tool_call when both share the same ts)
-    events.sort(key=lambda e: e.get("ts", ""))
+    # Sort by: (1) timestamp, (2) type priority, (3) original history sequence.
+    # This ensures user_message always precedes the assistant response at the same ts,
+    # and tool_call precedes tool_result, while preserving insertion order as final tiebreaker.
+    events.sort(key=lambda e: (
+        e.get("ts", ""),
+        _TYPE_ORDER.get(e.get("type", ""), 9),
+        e.get("_seq", 0),
+    ))
+
+    # Strip internal sort key before returning
+    for e in events:
+        e.pop("_seq", None)
 
     return events
 

@@ -159,6 +159,9 @@ body {
   60%  { transform: scale(1.1) rotate(3deg); }
   100% { transform: scale(1) rotate(0deg); opacity: 1; }
 }
+@keyframes spin {
+  to { transform: translateY(-50%) rotate(360deg); }
+}
 
 .animate-fade-in {
   animation: fade-in 0.4s ease-out both;
