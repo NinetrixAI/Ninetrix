@@ -16,7 +16,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/ninetrix-ai/ninetrix-api:latest
+    image: ghcr.io/ninetrixai/ninetrix-api:latest
     build:
       context: ../../packages/api
       dockerfile: Dockerfile
@@ -35,7 +35,7 @@ services:
       retries: 12
 
   mcp-gateway:
-    image: ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest
+    image: ghcr.io/ninetrixai/ninetrix-mcp-gateway:latest
     build:
       context: ../../packages/mcp-gateway
       dockerfile: Dockerfile
@@ -52,7 +52,7 @@ services:
     profiles: ["mcp"]
 
   mcp-worker:
-    image: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
+    image: ghcr.io/ninetrixai/ninetrix-mcp-worker:latest
     build:
       context: ../../packages/mcp-worker
       dockerfile: Dockerfile

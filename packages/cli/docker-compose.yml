@@ -18,7 +18,7 @@ services:
       retries: 10
     restart: unless-stopped
   api:
-    image: ghcr.io/ninetrix-ai/ninetrix-api:latest
+    image: ghcr.io/ninetrixai/ninetrix-api:latest
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/agentfile
       AGENTFILE_RUNNER_TOKENS: ${AGENTFILE_RUNNER_TOKEN}

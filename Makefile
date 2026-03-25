@@ -25,15 +25,15 @@ release-cli: ## Build and publish CLI to PyPI
 
 release-api: ## Build and push API Docker image
 	docker buildx build --platform linux/amd64,linux/arm64 \
-		-t ghcr.io/ninetrix-ai/ninetrix-api:latest \
+		-t ghcr.io/ninetrixai/ninetrix-api:latest \
 		-f packages/api/Dockerfile packages/api --push
 
 release-mcp-gateway: ## Build and push MCP Gateway Docker image
 	docker buildx build --platform linux/amd64,linux/arm64 \
-		-t ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest \
+		-t ghcr.io/ninetrixai/ninetrix-mcp-gateway:latest \
 		-f packages/mcp-gateway/Dockerfile packages/mcp-gateway --push
 
 release-mcp-worker: ## Build and push MCP Worker Docker image
 	docker buildx build --platform linux/amd64,linux/arm64 \
-		-t ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest \
+		-t ghcr.io/ninetrixai/ninetrix-mcp-worker:latest \
 		-f packages/mcp-worker/Dockerfile packages/mcp-worker --push

@@ -17,7 +17,7 @@ services:
       retries: 10
 
   api:
-    image: ghcr.io/ninetrix-ai/ninetrix-api:latest
+    image: ghcr.io/ninetrixai/ninetrix-api:latest
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ninetrix}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ninetrix}
     depends_on:
@@ -31,7 +31,7 @@ services:
       retries: 12
 
   mcp-gateway:
-    image: ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest
+    image: ghcr.io/ninetrixai/ninetrix-mcp-gateway:latest
     environment:
       MCP_GATEWAY_SECRET: ${MCP_GATEWAY_SECRET:?MCP_GATEWAY_SECRET is required}
       MCP_GATEWAY_REQUIRE_AUTH: "${MCP_GATEWAY_REQUIRE_AUTH:-true}"
@@ -43,7 +43,7 @@ services:
       retries: 12
 
   mcp-worker:
-    image: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
+    image: ghcr.io/ninetrixai/ninetrix-mcp-worker:latest
     environment:
       MCP_GATEWAY_URL: ws://mcp-gateway:8080
       MCP_WORKSPACE_ID: ${MCP_WORKSPACE_ID:-default}

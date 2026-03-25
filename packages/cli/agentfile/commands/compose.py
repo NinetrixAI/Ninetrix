@@ -233,7 +233,7 @@ def _build_api_image(client: docker.DockerClient, api_dir: Path, tag: str = "lat
 @click.option("--file", "-f", "agentfile_path", default="agentfile.yaml",
               show_default=True, help="Path to agentfile.yaml")
 @click.option("--tag", "-t", default="latest", show_default=True, help="Image tag")
-@click.option("--api-image", default="ghcr.io/ninetrix-ai/ninetrix-api:latest",
+@click.option("--api-image", default="ghcr.io/ninetrixai/ninetrix-api:latest",
               show_default=True, help="Docker image for the observability API")
 @click.option("--build-api", is_flag=True, default=False,
               help="Build the API image locally before starting (requires --api-dir or auto-detect)")

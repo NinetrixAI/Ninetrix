@@ -21,4 +21,4 @@
           with:
             context: api/
             push: true
-            tags: ghcr.io/ninetrix-ai/ninetrix-api:latest
+            tags: ghcr.io/ninetrixai/ninetrix-api:latest

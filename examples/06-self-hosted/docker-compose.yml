@@ -14,7 +14,7 @@ services:
       interval: 5s
 
   mcp-gateway:
-    image: ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest
+    image: ghcr.io/ninetrixai/ninetrix-mcp-gateway:latest
     ports:
       - "8080:8080"
     environment:
