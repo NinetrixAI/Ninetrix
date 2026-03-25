@@ -43,7 +43,7 @@ jobs:
           context: packages/api
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/ninetrix-ai/ninetrix-api:latest
+          tags: ghcr.io/ninetrixai/ninetrix-api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -67,7 +67,7 @@ jobs:
           context: packages/mcp-gateway
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/ninetrix-ai/ninetrix-mcp-gateway:latest
+          tags: ghcr.io/ninetrixai/ninetrix-mcp-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -91,6 +91,6 @@ jobs:
           context: packages/mcp-worker
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
+          tags: ghcr.io/ninetrixai/ninetrix-mcp-worker:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

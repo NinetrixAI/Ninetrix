@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-push:
-    name: Build & Push ghcr.io/ninetrix-ai/ninetrix-mcp-worker
+    name: Build & Push ghcr.io/ninetrixai/ninetrix-mcp-worker
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -41,7 +41,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/ninetrix-ai/ninetrix-mcp-worker:latest
-            ghcr.io/ninetrix-ai/ninetrix-mcp-worker:${{ steps.meta.outputs.version }}
+            ghcr.io/ninetrixai/ninetrix-mcp-worker:latest
+            ghcr.io/ninetrixai/ninetrix-mcp-worker:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

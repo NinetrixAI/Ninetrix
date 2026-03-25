@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-push:
-    name: Build & Push ghcr.io/ninetrix-ai/ninetrix-api
+    name: Build & Push ghcr.io/ninetrixai/ninetrix-api
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,7 +52,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/ninetrix-ai/ninetrix-api:latest
-            ghcr.io/ninetrix-ai/ninetrix-api:${{ steps.meta.outputs.version }}
+            ghcr.io/ninetrixai/ninetrix-api:latest
+            ghcr.io/ninetrixai/ninetrix-api:${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
