@@ -423,24 +423,32 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     channel_triggers = [t for t in eff_triggers if t.type == "channel"]
     if channel_triggers:
         from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg
-        from agentfile.commands.channel import setup_telegram_interactive
         for ct in channel_triggers:
             for ch_type in ct.channels:
-                if ch_type == "telegram":
-                    if not is_verified("telegram"):
-                        # Check if the API has a verified channel (e.g. set up via dashboard)
-                        _synced = _try_sync_channel_from_api("telegram")
-                    if not is_verified("telegram"):
-                        console.print(
-                            "  [yellow]📱 Telegram channel detected but not configured.[/yellow]\n"
-                        )
+                if not is_verified(ch_type):
+                    # Check if the API has a verified channel (e.g. set up via dashboard)
+                    _try_sync_channel_from_api(ch_type)
+                if not is_verified(ch_type):
+                    console.print(
+                        f"  [yellow]📱 {ch_type.title()} channel detected but not configured.[/yellow]\n"
+                    )
+                    if ch_type == "telegram":
+                        from agentfile.commands.channel import setup_telegram_interactive
                         ok = setup_telegram_interactive(agent_name=agent.name)
-                        if not ok:
-                            console.print("  [dim]Skipping Telegram setup. Run later:[/dim] [bold]ninetrix channel connect telegram[/bold]\n")
+                    elif ch_type == "discord":
+                        from agentfile.commands.channel import setup_discord_interactive
+                        ok = setup_discord_interactive(agent_name=agent.name)
+                    elif ch_type == "whatsapp":
+                        from agentfile.commands.channel import setup_whatsapp_interactive
+                        ok = setup_whatsapp_interactive(agent_name=agent.name)
                     else:
-                        _tg = _get_ch_cfg("telegram")
-                        _bot = _tg.get("bot_username", "?") if _tg else "?"
-                        console.print(f"  [green]✓[/green] Telegram connected: [bold]@{_bot}[/bold]\n")
+                        ok = False
+                    if not ok:
+                        console.print(f"  [dim]Skipping {ch_type} setup. Run later:[/dim] [bold]ninetrix channel connect {ch_type}[/bold]\n")
+                else:
+                    _ch_cfg = _get_ch_cfg(ch_type)
+                    _bot = _ch_cfg.get("bot_username", "?") if _ch_cfg else "?"
+                    console.print(f"  [green]✓[/green] {ch_type.title()} connected: [bold]@{_bot}[/bold]\n")
 
     webhook_triggers = [t for t in eff_triggers if t.type in ("webhook", "channel")]
     port_bindings: list[str] = []
@@ -496,10 +504,32 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
                     env.setdefault(_canonical, _val)
                     env.setdefault(_alias, _val)
 
-    # Forward any AGENTFILE_* runtime overrides from the host env (don't overwrite
-    # values already set above — e.g. AGENTFILE_PROVIDER always comes from the yaml).
+    # Forward known AGENTFILE_* runtime overrides from the host env.
+    # Uses an allowlist to avoid leaking unrelated host env vars into containers.
+    _AGENTFILE_ALLOWLIST = {
+        "AGENTFILE_PROVIDER", "AGENTFILE_MODEL", "AGENTFILE_TEMPERATURE",
+        "AGENTFILE_MAX_TOKENS", "AGENTFILE_MAX_TURNS", "AGENTFILE_TOOL_TIMEOUT",
+        "AGENTFILE_HISTORY_WINDOW_TOKENS", "AGENTFILE_MAX_PLAN_STEPS",
+        "AGENTFILE_VERIFY_STEPS", "AGENTFILE_ON_STEP_FAILURE",
+        "AGENTFILE_THINKING_ENABLED", "AGENTFILE_THINKING_PROVIDER",
+        "AGENTFILE_THINKING_MODEL", "AGENTFILE_THINKING_MAX_TOKENS",
+        "AGENTFILE_THINKING_TEMPERATURE", "AGENTFILE_THINKING_MIN_LENGTH",
+        "AGENTFILE_THINKING_PROMPT",
+        "AGENTFILE_VERIFIER_MODEL",
+        "AGENTFILE_APPROVAL_ENABLED",
+        "AGENTFILE_API_URL", "AGENTFILE_RUNNER_TOKEN",
+        "AGENTFILE_THREAD_ID", "AGENTFILE_SYSTEM_PROMPT",
+        "AGENTFILE_WEBHOOK_PORT",
+        "AGENTFILE_CHANNEL_SESSION_MODE", "AGENTFILE_CHANNEL_VERBOSE",
+        "AGENTFILE_CHANNEL_ALLOWED_IDS", "AGENTFILE_CHANNEL_REJECT_MESSAGE",
+        "AGENTFILE_CHANNEL_LEGACY_BRIDGE",
+        "AGENTFILE_APPROVAL_NOTIFY_URL",
+    }
+    # Also forward any AGENTFILE_CHANNEL_<TYPE>_* and AGENTFILE_VOL_* vars.
     for _k, _v in os.environ.items():
-        if _k.startswith("AGENTFILE_"):
+        if not _k.startswith("AGENTFILE_"):
+            continue
+        if _k in _AGENTFILE_ALLOWLIST or _k.startswith("AGENTFILE_CHANNEL_") or _k.startswith("AGENTFILE_VOL_") or _k.startswith("AGENTFILE_PEER_"):
             env.setdefault(_k, _v)
 
     # Inject channel credentials into container env vars.
@@ -511,10 +541,15 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
         _all_channel_types: set[str] = set()
         for ct in channel_triggers:
             _all_channel_types.update(ct.channels)
-            # Inject session_mode and verbose from the trigger config
+            # Inject session_mode, verbose, and access control from the trigger config
             env.setdefault("AGENTFILE_CHANNEL_SESSION_MODE", ct.session_mode)
             env.setdefault("AGENTFILE_CHANNEL_VERBOSE", "true" if ct.verbose else "false")
+            if ct.allowed_ids:
+                env.setdefault("AGENTFILE_CHANNEL_ALLOWED_IDS", ",".join(ct.allowed_ids))
+            if ct.reject_message:
+                env.setdefault("AGENTFILE_CHANNEL_REJECT_MESSAGE", ct.reject_message)
 
+        _wa_volume: str | None = None
         for _ch_type in sorted(_all_channel_types):
             _ch_cfg = _get_ch(_ch_type)
             if _ch_cfg and _ch_cfg.get("verified"):
@@ -523,7 +558,15 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
                     env[f"{_prefix}_BOT_TOKEN"] = _ch_cfg["bot_token"]
                 if _ch_cfg.get("chat_id"):
                     env[f"{_prefix}_CHAT_ID"] = str(_ch_cfg["chat_id"])
-                _ch_label = _ch_cfg.get("bot_username") or _ch_type
+
+                # WhatsApp: mount auth dir as volume + set env vars
+                if _ch_type == "whatsapp":
+                    _wa_auth = _ch_cfg.get("auth_dir", str(Path.home() / ".agentfile" / "whatsapp-auth"))
+                    env[f"{_prefix}_AUTH_DIR"] = "/data/whatsapp"
+                    env[f"{_prefix}_ENABLED"] = "true"
+                    _wa_volume = f"{_wa_auth}:/data/whatsapp"
+
+                _ch_label = _ch_cfg.get("bot_username") or _ch_cfg.get("phone_number") or _ch_type
                 console.print(
                     f"  [green]📱 {_ch_type.title()} channel:[/green] "
                     f"credentials injected into container (@{_ch_label})"
@@ -545,6 +588,17 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
                         bot_name = tg_cfg.get("bot_username", "?") if tg_cfg else "?"
                         console.print(f"  [green]📱 Telegram bridge active (legacy):[/green] @{bot_name} → localhost:{_bridge_port}/run\n")
                     break
+
+    # Mount WhatsApp auth volume if configured
+    if channel_triggers and _wa_volume:
+        from agentfile.core.models import VolumeSpec
+        _wa_parts = _wa_volume.split(":")
+        local_volumes.append(VolumeSpec(
+            name="whatsapp-auth",
+            provider="local",
+            host_path=_wa_parts[0],
+            container_path=_wa_parts[1],
+        ))
 
     res = agent.resources
     try:

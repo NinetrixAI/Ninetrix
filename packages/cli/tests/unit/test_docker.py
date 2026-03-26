@@ -74,7 +74,9 @@ class TestRunContainer:
         assert "--rm" in cmd
         assert "-it" in cmd
         assert "ninetrix/test:latest" in cmd
-        assert "-e" in cmd
+        # Env vars should be passed via --env-file (not -e) to avoid ps aux exposure.
+        assert "--env-file" in cmd
+        assert "-e" not in cmd
 
     @patch("subprocess.run")
     def test_non_interactive(self, mock_run):
@@ -168,6 +170,109 @@ class TestRunContainer:
         from agentfile.core.docker import run_container
         with pytest.raises(SystemExit):
             run_container("img:latest")
+
+
+class TestEnvFileSecurity:
+    """Tests for env-file based secret passing (prevents ps aux exposure)."""
+
+    @patch("subprocess.run")
+    def test_env_file_created_with_env_vars(self, mock_run):
+        """Env vars should be written to a temp file and passed via --env-file."""
+        from agentfile.core.docker import run_container
+        run_container("img:latest", env={"API_KEY": "sk-secret", "FOO": "bar"})
+
+        cmd = mock_run.call_args[0][0]
+        assert "--env-file" in cmd
+        # The secret should NOT appear anywhere in the command line
+        assert "sk-secret" not in " ".join(cmd)
+
+    @patch("subprocess.run")
+    def test_env_file_cleaned_up(self, mock_run):
+        """The temp env file should be deleted after the container run."""
+        import os
+        from agentfile.core.docker import run_container
+        run_container("img:latest", env={"KEY": "val"})
+
+        cmd = mock_run.call_args[0][0]
+        env_file_idx = cmd.index("--env-file")
+        env_file_path = cmd[env_file_idx + 1]
+        # File should have been cleaned up in the finally block
+        assert not os.path.exists(env_file_path)
+
+    @patch("subprocess.run")
+    def test_env_file_cleaned_up_on_error(self, mock_run):
+        """The temp env file should be cleaned up even if subprocess raises."""
+        import os
+        mock_run.side_effect = RuntimeError("boom")
+        from agentfile.core.docker import run_container
+        try:
+            run_container("img:latest", env={"KEY": "val"})
+        except RuntimeError:
+            pass
+
+        cmd = mock_run.call_args[0][0]
+        env_file_idx = cmd.index("--env-file")
+        env_file_path = cmd[env_file_idx + 1]
+        assert not os.path.exists(env_file_path)
+
+    @patch("subprocess.run")
+    def test_env_file_permissions(self, mock_run):
+        """The env file should have 0600 permissions while it exists."""
+        import os
+        import stat
+
+        perms_seen = []
+
+        def capture_perms(cmd, **kwargs):
+            idx = cmd.index("--env-file")
+            path = cmd[idx + 1]
+            if os.path.exists(path):
+                mode = os.stat(path).st_mode
+                perms_seen.append(stat.S_IMODE(mode))
+            return MagicMock(returncode=0, stderr="")
+
+        mock_run.side_effect = capture_perms
+
+        from agentfile.core.docker import run_container
+        run_container("img:latest", env={"SECRET": "hunter2"})
+
+        assert len(perms_seen) == 1
+        assert perms_seen[0] == 0o600
+
+    @patch("subprocess.run")
+    def test_empty_env_still_uses_env_file(self, mock_run):
+        """Even with no env vars, --env-file should be used (empty file)."""
+        from agentfile.core.docker import run_container
+        run_container("img:latest", env={})
+
+        cmd = mock_run.call_args[0][0]
+        assert "--env-file" in cmd
+
+    @patch("subprocess.run")
+    def test_env_file_content_format(self, mock_run):
+        """Verify the env file content matches Docker --env-file format."""
+        import os
+
+        content_seen = []
+
+        def capture_content(cmd, **kwargs):
+            idx = cmd.index("--env-file")
+            path = cmd[idx + 1]
+            if os.path.exists(path):
+                with open(path) as f:
+                    content_seen.append(f.read())
+            return MagicMock(returncode=0, stderr="")
+
+        mock_run.side_effect = capture_content
+
+        from agentfile.core.docker import run_container
+        run_container("img:latest", env={"A": "1", "B": "hello world"})
+
+        assert len(content_seen) == 1
+        lines = content_seen[0].strip().split("\n")
+        parsed = dict(line.split("=", 1) for line in lines)
+        assert parsed["A"] == "1"
+        assert parsed["B"] == "hello world"
 
 
 class TestPushImage:

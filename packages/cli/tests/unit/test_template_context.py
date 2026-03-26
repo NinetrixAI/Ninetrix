@@ -293,3 +293,115 @@ class TestBuildContextVolumes:
         ctx = build_context(af, agent)
         has_s3 = ctx.has_s3_volumes if hasattr(ctx, "has_s3_volumes") else ctx["has_s3_volumes"]
         assert has_s3 is True
+
+
+# ---------------------------------------------------------------------------
+# _validate_local_path — path traversal prevention
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+import tempfile
+import os
+
+from agentfile.core.template_context import _validate_local_path
+
+
+class TestValidateLocalPath:
+    """Unit tests for _validate_local_path path-traversal guard."""
+
+    def test_simple_relative_path(self, tmp_path):
+        """A normal relative path inside the base dir should resolve fine."""
+        child = tmp_path / "tools" / "my_tool.py"
+        child.parent.mkdir(parents=True, exist_ok=True)
+        child.touch()
+        result = _validate_local_path(tmp_path, "tools/my_tool.py")
+        assert result == child.resolve()
+
+    def test_dot_slash_prefix(self, tmp_path):
+        """./relative paths are standard in agentfile.yaml."""
+        child = tmp_path / "my_tool.py"
+        child.touch()
+        result = _validate_local_path(tmp_path, "./my_tool.py")
+        assert result == child.resolve()
+
+    def test_traversal_parent_dir_rejected(self, tmp_path):
+        """../../etc/passwd style traversal must be blocked."""
+        with pytest.raises(ValueError, match="escapes the project directory"):
+            _validate_local_path(tmp_path, "../../etc/passwd")
+
+    def test_traversal_dotdot_then_back_allowed(self, tmp_path):
+        """../base_name/file resolves back inside — should be allowed."""
+        child = tmp_path / "tool.py"
+        child.touch()
+        # e.g. base=/a/b/project, path=../project/tool.py => resolves inside
+        result = _validate_local_path(tmp_path, f"../{tmp_path.name}/tool.py")
+        assert result == child.resolve()
+
+    def test_traversal_absolute_outside_rejected(self, tmp_path):
+        """/etc/passwd as source should be rejected."""
+        with pytest.raises(ValueError, match="escapes the project directory"):
+            _validate_local_path(tmp_path, "/etc/passwd")
+
+    def test_traversal_deep_escape_rejected(self, tmp_path):
+        """Many levels of ../ must still be caught."""
+        with pytest.raises(ValueError, match="escapes the project directory"):
+            _validate_local_path(tmp_path, "../" * 20 + "etc/shadow")
+
+    def test_symlink_escape_rejected(self, tmp_path):
+        """A symlink pointing outside the base dir must be caught."""
+        link = tmp_path / "evil_link"
+        link.symlink_to("/etc")
+        with pytest.raises(ValueError, match="escapes the project directory"):
+            _validate_local_path(tmp_path, "evil_link/passwd")
+
+    def test_file_in_nested_subdir(self, tmp_path):
+        """Deeply nested but valid paths work."""
+        nested = tmp_path / "a" / "b" / "c" / "tool.py"
+        nested.parent.mkdir(parents=True)
+        nested.touch()
+        result = _validate_local_path(tmp_path, "a/b/c/tool.py")
+        assert result == nested.resolve()
+
+    def test_base_dir_itself_is_valid(self, tmp_path):
+        """Edge case: source='.' resolves to the base dir itself."""
+        result = _validate_local_path(tmp_path, ".")
+        assert result == tmp_path.resolve()
+
+    def test_error_message_contains_path_info(self, tmp_path):
+        """Error message should help the user identify the problem."""
+        with pytest.raises(ValueError) as exc_info:
+            _validate_local_path(tmp_path, "../../secret.py")
+        msg = str(exc_info.value)
+        assert "../../secret.py" in msg
+        assert str(tmp_path.resolve()) in msg
+
+
+class TestBuildContextPathTraversal:
+    """Integration tests: build_context rejects path traversal in tools/skills."""
+
+    def test_local_tool_traversal_rejected(self, tmp_path):
+        """A local tool with ../ traversal must raise ValueError.
+
+        Source must start with './' to be classified as local by Tool.is_local().
+        """
+        agent = AgentDef(
+            name="bad-agent",
+            tools=[Tool(name="evil", source="./../../etc/passwd")],
+        )
+        af = AgentFile(agents={"bad-agent": agent}, governance=Governance())
+        with pytest.raises(ValueError, match="escapes the project directory"):
+            build_context(af, agent, agentfile_dir=str(tmp_path))
+
+    def test_local_tool_valid_path_accepted(self, tmp_path):
+        """A local tool with a safe relative path should work."""
+        tool_file = tmp_path / "my_tool.py"
+        tool_file.write_text("# tool")
+        agent = AgentDef(
+            name="good-agent",
+            tools=[Tool(name="my_tool", source="./my_tool.py")],
+        )
+        af = AgentFile(agents={"good-agent": agent}, governance=Governance())
+        ctx = build_context(af, agent, agentfile_dir=str(tmp_path))
+        paths = ctx.local_source_paths if hasattr(ctx, "local_source_paths") else ctx["local_source_paths"]
+        assert len(paths) == 1
+        assert paths[0] == str(tool_file.resolve())

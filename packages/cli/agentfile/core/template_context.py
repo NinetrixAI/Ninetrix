@@ -12,6 +12,23 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+
+def _validate_local_path(base_dir: Path, relative: str) -> Path:
+    """Resolve *relative* under *base_dir* and ensure it stays within it.
+
+    Raises ``ValueError`` if the resolved path escapes the base directory
+    (e.g. via ``../../`` traversal).
+    """
+    resolved = (base_dir / relative).resolve()
+    base_resolved = base_dir.resolve()
+    # Use os.path for reliable prefix check (handles trailing slashes).
+    if not (resolved == base_resolved or str(resolved).startswith(str(base_resolved) + "/")):
+        raise ValueError(
+            f"Local source path escapes the project directory: {relative!r} "
+            f"resolves to {resolved} which is outside {base_resolved}"
+        )
+    return resolved
+
 try:
     from pydantic import BaseModel, ConfigDict
     _PYDANTIC_AVAILABLE = True
@@ -350,7 +367,7 @@ def build_context(
             _seen: set[str] = set()
             # Collect source paths first — these don't require the SDK.
             for _t in _local_sources:
-                _src = (_af_dir / _t.source).resolve()
+                _src = _validate_local_path(_af_dir, _t.source)
                 if str(_src) not in _seen:
                     _seen.add(str(_src))
                     local_tool_files.append(f"/app/tools/{_src.name}")
@@ -415,7 +432,7 @@ def build_context(
             elif _warn:
                 _warn(f"Skill '{_s.source}': could not resolve from Skills Hub")
         elif _s.is_local() and agentfile_dir is not None:
-            _skill_path = (Path(agentfile_dir) / _s.source).resolve()
+            _skill_path = _validate_local_path(Path(agentfile_dir), _s.source)
             _body = _resolve_local_skill(_skill_path)
             if _body is not None:
                 skill_instructions_parts.append(_body)
@@ -484,6 +501,10 @@ def build_context(
     if has_channel_triggers:
         # ninetrix-channels is copied into the build context (not from PyPI)
         _collected_pip.add("httpx>=0.27")
+        if "discord" in channel_types:
+            _collected_pip.add("discord.py>=2.3")
+        if "whatsapp" in channel_types:
+            _collected_pip.add("qrcode>=7.4")  # terminal QR rendering
     if has_any_triggers or is_multi_agent or has_invoke_server:
         _collected_pip.update(["fastapi>=0.104", "uvicorn[standard]>=0.24"])
     if has_schedule_triggers:

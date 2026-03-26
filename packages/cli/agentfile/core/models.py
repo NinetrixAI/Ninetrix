@@ -202,9 +202,11 @@ class Trigger(BaseModel):
     port: int = 9100
     message: str = ""
     target_agent: Optional[str] = None
-    channels: list[str] = []           # channel types: ["telegram", "whatsapp"]
+    channels: list[str] = Field(default_factory=list)   # channel types: ["telegram", "whatsapp"]
     session_mode: str = "per_chat"     # per_message | per_chat
     verbose: bool = True               # print channel I/O to agent console
+    allowed_ids: list[str] = Field(default_factory=list)  # allowlist: only these user/chat IDs get responses
+    reject_message: str = ""           # optional message sent to blocked users (empty = silent)
 
 
 class Verifier(BaseModel):

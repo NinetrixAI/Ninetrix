@@ -33,7 +33,12 @@ def read_token(api_url: str) -> str | None:
             if t := data.get("token"):
                 return t
         except Exception:
-            pass
+            import sys
+            print(
+                f"WARNING: Could not read {TOKEN_FILE} — file may be corrupted. "
+                "Run `ninetrix auth login` to re-authenticate.",
+                file=sys.stderr,
+            )
 
     try:
         parsed = urllib.parse.urlparse(api_url)

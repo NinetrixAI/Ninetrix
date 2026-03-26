@@ -73,6 +73,14 @@ class TestReadToken:
         isolate_auth["secret"].write_text("machine")
         assert read_token("http://localhost:8000") == "machine"
 
+    def test_corrupt_auth_json_prints_warning(self, isolate_auth, capsys):
+        """Corrupt auth.json should print a warning to stderr."""
+        isolate_auth["token"].write_text("not-json{{{")
+        read_token("http://remote-api.com")
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "corrupted" in captured.err.lower() or "auth.json" in captured.err
+
 
 class TestAuthHeaders:
     def test_returns_bearer_header(self, monkeypatch):

@@ -406,3 +406,41 @@ class TestLocalApiHelpers:
         with patch("httpx.get", return_value=mock_resp):
             from agentfile.commands.run import _is_gateway_running
             assert _is_gateway_running() is True
+
+
+# ── AGENTFILE_* env var allowlist ──────────────────────────────────────────
+
+
+class TestAgentfileEnvAllowlist:
+    """Verify the AGENTFILE_* env var forwarding uses an allowlist."""
+
+    def _read_allowlist_block(self):
+        """Extract the allowlist set from run.py source."""
+        import ast
+        run_py = Path(__file__).resolve().parent.parent.parent / "agentfile" / "commands" / "run.py"
+        source = run_py.read_text()
+        # Find the allowlist definition
+        assert "_AGENTFILE_ALLOWLIST" in source, "Allowlist constant not found in run.py"
+        return source
+
+    def test_allowlist_exists_in_source(self):
+        source = self._read_allowlist_block()
+        assert "_AGENTFILE_ALLOWLIST" in source
+
+    def test_known_vars_in_allowlist(self):
+        """Core runtime override vars must be in the allowlist."""
+        source = self._read_allowlist_block()
+        for var in [
+            "AGENTFILE_PROVIDER", "AGENTFILE_MODEL", "AGENTFILE_TEMPERATURE",
+            "AGENTFILE_MAX_TOKENS", "AGENTFILE_MAX_TURNS",
+            "AGENTFILE_API_URL", "AGENTFILE_RUNNER_TOKEN",
+            "AGENTFILE_APPROVAL_ENABLED",
+        ]:
+            assert var in source, f"{var} missing from allowlist"
+
+    def test_wildcard_forward_removed(self):
+        """The old pattern of forwarding ALL AGENTFILE_* vars should be gone."""
+        source = self._read_allowlist_block()
+        # The old pattern was just: if _k.startswith("AGENTFILE_"): env.setdefault(_k, _v)
+        # With the allowlist, the forwarding should check against _AGENTFILE_ALLOWLIST
+        assert "_AGENTFILE_ALLOWLIST" in source

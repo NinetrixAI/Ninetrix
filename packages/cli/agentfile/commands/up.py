@@ -191,10 +191,31 @@ def _build_agent_env(
             if val:
                 env[aws_var] = val
 
-    # Forward any AGENTFILE_* runtime overrides from the host env (don't overwrite
-    # values already set above — e.g. AGENTFILE_PROVIDER always comes from the yaml).
+    # Forward known AGENTFILE_* runtime overrides from the host env.
+    # Uses an allowlist to avoid leaking unrelated host env vars into containers.
+    _AGENTFILE_ALLOWLIST = {
+        "AGENTFILE_PROVIDER", "AGENTFILE_MODEL", "AGENTFILE_TEMPERATURE",
+        "AGENTFILE_MAX_TOKENS", "AGENTFILE_MAX_TURNS", "AGENTFILE_TOOL_TIMEOUT",
+        "AGENTFILE_HISTORY_WINDOW_TOKENS", "AGENTFILE_MAX_PLAN_STEPS",
+        "AGENTFILE_VERIFY_STEPS", "AGENTFILE_ON_STEP_FAILURE",
+        "AGENTFILE_THINKING_ENABLED", "AGENTFILE_THINKING_PROVIDER",
+        "AGENTFILE_THINKING_MODEL", "AGENTFILE_THINKING_MAX_TOKENS",
+        "AGENTFILE_THINKING_TEMPERATURE", "AGENTFILE_THINKING_MIN_LENGTH",
+        "AGENTFILE_THINKING_PROMPT",
+        "AGENTFILE_VERIFIER_MODEL",
+        "AGENTFILE_APPROVAL_ENABLED",
+        "AGENTFILE_API_URL", "AGENTFILE_RUNNER_TOKEN",
+        "AGENTFILE_THREAD_ID", "AGENTFILE_SYSTEM_PROMPT",
+        "AGENTFILE_WEBHOOK_PORT",
+        "AGENTFILE_CHANNEL_SESSION_MODE", "AGENTFILE_CHANNEL_VERBOSE",
+        "AGENTFILE_CHANNEL_ALLOWED_IDS", "AGENTFILE_CHANNEL_REJECT_MESSAGE",
+        "AGENTFILE_CHANNEL_LEGACY_BRIDGE",
+        "AGENTFILE_APPROVAL_NOTIFY_URL",
+    }
     for _k, _v in os.environ.items():
-        if _k.startswith("AGENTFILE_"):
+        if not _k.startswith("AGENTFILE_"):
+            continue
+        if _k in _AGENTFILE_ALLOWLIST or _k.startswith("AGENTFILE_CHANNEL_") or _k.startswith("AGENTFILE_VOL_") or _k.startswith("AGENTFILE_PEER_"):
             env.setdefault(_k, _v)
 
     return env

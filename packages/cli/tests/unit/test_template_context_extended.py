@@ -130,8 +130,7 @@ class TestBuildContextLocalTools:
         af = AgentFile(agents={"test": agent}, governance=Governance())
 
         # ninetrix-sdk not installed → just sources, no manifest discovery
-        with patch("agentfile.core.template_context.Path") as _:
-            ctx = build_context(af, agent, agentfile_dir=tmp_path)
+        ctx = build_context(af, agent, agentfile_dir=str(tmp_path))
 
         # has_local_tools should be True since the source was declared
         assert _get(ctx, "has_local_tools") is True

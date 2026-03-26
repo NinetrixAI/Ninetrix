@@ -62,6 +62,31 @@ class TestWriteConfig:
         assert data["api_url"] == "http://b"
 
 
+class TestWriteConfigAtomic:
+    """Verify write_config uses atomic write (tmp + rename)."""
+
+    def test_no_partial_write_on_disk(self, isolate_config):
+        """After write_config, no .tmp file should remain."""
+        write_config({"key": "value"})
+        tmp_file = isolate_config.with_suffix(".tmp")
+        assert not tmp_file.exists()
+        assert isolate_config.exists()
+
+    def test_file_permissions(self, isolate_config):
+        """Config file should have 0644 permissions."""
+        write_config({"key": "value"})
+        mode = isolate_config.stat().st_mode & 0o777
+        assert mode == 0o644
+
+    def test_clear_api_url_also_atomic(self, isolate_config):
+        """clear_api_url should also use atomic write."""
+        set_api_url("http://test:8000")
+        clear_api_url()
+        tmp_file = isolate_config.with_suffix(".tmp")
+        assert not tmp_file.exists()
+        assert get_api_url() is None
+
+
 class TestGetApiUrl:
     def test_returns_none_when_not_set(self):
         assert get_api_url() is None

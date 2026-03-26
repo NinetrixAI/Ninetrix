@@ -7,6 +7,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -229,8 +230,28 @@ def run_container(
         cmd += ["--memory", str(_parse_memory(memory))]
     for port in (port_bindings or []):
         cmd += ["-p", port]
-    for k, v in env.items():
-        cmd += ["-e", f"{k}={v}"]
+    # Write env vars to a temp file instead of passing via command line.
+    # This prevents secrets (API keys, tokens) from appearing in `ps aux`.
+    env_file = tempfile.NamedTemporaryFile(
+        mode="w", prefix="ninetrix-env-", suffix=".env",
+        delete=False,
+    )
+    try:
+        for k, v in env.items():
+            # Docker --env-file format: KEY=VALUE (no quoting, newlines not supported).
+            # Replace newlines to avoid breaking the format.
+            env_file.write(f"{k}={v.replace(chr(10), ' ')}\n")
+        env_file.close()
+        os.chmod(env_file.name, 0o600)
+        cmd += ["--env-file", env_file.name]
+    except Exception:
+        # If env-file creation fails, clean up and fall back to inline args.
+        env_file.close()
+        os.unlink(env_file.name)
+        env_file = None  # type: ignore[assignment]
+        for k, v in env.items():
+            cmd += ["-e", f"{k}={v}"]
+
     for vol in (volumes or []):
         if vol.provider == "local" and vol.host_path:
             host_path = os.path.expandvars(vol.host_path)
@@ -264,6 +285,13 @@ def run_container(
         sys.exit(1)
     except KeyboardInterrupt:
         pass  # user pressed Ctrl+C — clean exit
+    finally:
+        # Clean up the temporary env file so secrets don't persist on disk.
+        if env_file is not None:
+            try:
+                os.unlink(env_file.name)
+            except OSError:
+                pass
 
 
 def push_image(image_name: str) -> None:

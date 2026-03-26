@@ -818,3 +818,24 @@ class TestFullFeaturedYaml:
         assert len(composio) == 1
         assert composio[0].composio_app == "GITHUB"
         assert "GITHUB_LIST_REPOS" in composio[0].actions
+
+
+class TestTriggerDefaults:
+    """Verify Trigger list fields use proper default_factory (no mutable default sharing)."""
+
+    def test_channels_default_is_empty_list(self):
+        t = Trigger(type="webhook")
+        assert t.channels == []
+
+    def test_allowed_ids_default_is_empty_list(self):
+        t = Trigger(type="webhook")
+        assert t.allowed_ids == []
+
+    def test_separate_instances_have_independent_lists(self):
+        """Two Trigger instances must not share the same list object."""
+        t1 = Trigger(type="webhook")
+        t2 = Trigger(type="webhook")
+        # Pydantic frozen=True prevents mutation, but verify they're
+        # separate objects at construction time.
+        assert t1.channels is not t2.channels
+        assert t1.allowed_ids is not t2.allowed_ids

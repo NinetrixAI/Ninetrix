@@ -34,13 +34,18 @@ def read_config() -> dict[str, Any]:
 
 
 def write_config(data: dict[str, Any]) -> None:
-    """Persist *data* to config.json, merging with any existing keys."""
+    """Persist *data* to config.json, merging with any existing keys.
+
+    Uses atomic write (write to .tmp, then rename) to prevent corruption
+    if two CLI processes write concurrently.
+    """
     current = read_config()
     current.update(data)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(current, indent=2))
-    # 0644 — api_url is not secret, but limit to the owning user anyway
-    CONFIG_FILE.chmod(0o644)
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(current, indent=2))
+    tmp.chmod(0o644)
+    tmp.replace(CONFIG_FILE)
 
 
 # ── API URL ─────────────────────────────────────────────────────────────────
@@ -65,8 +70,10 @@ def clear_api_url() -> None:
     current = read_config()
     current.pop("api_url", None)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(current, indent=2))
-    CONFIG_FILE.chmod(0o644)
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(current, indent=2))
+    tmp.chmod(0o644)
+    tmp.replace(CONFIG_FILE)
 
 
 def resolve_api_url() -> str:

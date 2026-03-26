@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 
@@ -24,6 +25,20 @@ logger = logging.getLogger(__name__)
 _console = Console(stderr=True)  # print to stderr so it doesn't mix with container stdout
 
 _TG_API = "https://api.telegram.org/bot{token}"
+
+# Pattern to redact Telegram bot tokens from URLs in logs/errors.
+# Matches the format: /bot<digits>:<alphanumeric>/
+_BOT_TOKEN_RE = re.compile(r"/bot\d+:[A-Za-z0-9_-]+")
+
+
+def _redact_token(url: str) -> str:
+    """Replace a Telegram bot token in a URL with a placeholder."""
+    return _BOT_TOKEN_RE.sub("/bot<REDACTED>", url)
+
+
+def _tg_url(bot_token: str, method: str) -> str:
+    """Build a Telegram API URL. Centralises token embedding."""
+    return f"{_TG_API.format(token=bot_token)}/{method}"
 
 
 class ChannelBridge:
@@ -80,7 +95,7 @@ class ChannelBridge:
                     params["offset"] = offset
 
                 resp = httpx.get(
-                    f"{_TG_API.format(token=bot_token)}/getUpdates",
+                    _tg_url(bot_token, "getUpdates"),
                     params=params,
                     timeout=40,
                 )
@@ -88,7 +103,7 @@ class ChannelBridge:
                 if resp.status_code == 409:
                     # Webhook still set — delete it
                     httpx.post(
-                        f"{_TG_API.format(token=bot_token)}/deleteWebhook",
+                        _tg_url(bot_token, "deleteWebhook"),
                         json={"drop_pending_updates": False},
                         timeout=10,
                     )
@@ -119,8 +134,10 @@ class ChannelBridge:
 
             except httpx.ReadTimeout:
                 continue
-            except Exception:
-                logger.debug("Telegram bridge error", exc_info=True)
+            except Exception as exc:
+                # Redact bot token from exception message before logging.
+                redacted = _redact_token(str(exc))
+                logger.debug("Telegram bridge error: %s", redacted)
                 time.sleep(5)
 
     def _wait_for_container(self) -> None:
@@ -241,7 +258,7 @@ def _split_message(text: str, max_len: int = 4000) -> list[str]:
 def _send_tg(bot_token: str, chat_id: str, text: str) -> None:
     try:
         httpx.post(
-            f"{_TG_API.format(token=bot_token)}/sendMessage",
+            _tg_url(bot_token, "sendMessage"),
             json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
