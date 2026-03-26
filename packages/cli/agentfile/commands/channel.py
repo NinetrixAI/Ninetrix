@@ -739,12 +739,20 @@ def channel_cmd():
 @click.option("--bot", "-b", "bot_name", default=None, help="Bot name (for multiple bots of same type)")
 def connect(platform: str, agent: str | None, bot_name: str | None):
     """Connect a messaging platform to your agents."""
+    ok = False
     if platform == "telegram":
-        setup_telegram_interactive(agent_name=agent, bot_name=bot_name)
+        ok = setup_telegram_interactive(agent_name=agent, bot_name=bot_name)
     elif platform == "discord":
-        setup_discord_interactive(agent_name=agent, bot_name=bot_name)
+        ok = setup_discord_interactive(agent_name=agent, bot_name=bot_name)
     elif platform == "whatsapp":
-        setup_whatsapp_interactive(agent_name=agent)
+        ok = setup_whatsapp_interactive(agent_name=agent)
+    # Immediately sync to API so dashboard sees it
+    if ok:
+        try:
+            from agentfile.commands.run import _sync_bots_to_api
+            _sync_bots_to_api()
+        except Exception:
+            pass
 
 
 @channel_cmd.command("disconnect")
@@ -804,10 +812,11 @@ def rename(old_name: str, new_name: str):
 @channel_cmd.command("status")
 def status():
     """Show all connected bots."""
-    # Sync from API first so dashboard-created channels appear
+    # Bidirectional sync: push local → API first, then pull API → local
     try:
-        from agentfile.commands.run import _sync_api_to_bots
-        _sync_api_to_bots()
+        from agentfile.commands.run import _sync_bots_to_api, _sync_api_to_bots
+        _sync_bots_to_api()   # push new CLI bots to API (before API→local removes them)
+        _sync_api_to_bots()   # pull dashboard bots + remove deleted ones
     except Exception:
         pass
 

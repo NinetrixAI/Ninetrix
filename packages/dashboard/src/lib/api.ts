@@ -152,7 +152,10 @@ export interface ChannelBinding {
 async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: "no-store", ...opts });
   if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
-  return res.json();
+  // DELETE and 204 return empty body — don't parse as JSON
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text);
 }
 
 /* ── Auth ────────────────────────────────────────────────────────────────── */

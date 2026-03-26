@@ -262,9 +262,10 @@ def _sync_api_to_bots() -> None:
 
     This keeps the CLI in sync with the dashboard. Called on startup
     alongside _sync_bots_to_api() for bidirectional sync.
+    Also removes bots from channels.yaml that were deleted from the API.
     """
     from agentfile.core.config import resolve_api_url
-    from agentfile.core.channel_config import get_bot, save_bot
+    from agentfile.core.channel_config import get_bot, save_bot, list_bots, remove_bot
 
     api_url = resolve_api_url()
     if not api_url:
@@ -287,6 +288,19 @@ def _sync_api_to_bots() -> None:
         channels = resp.json()
     except Exception:
         return
+
+    # Build set of bot names that exist in the API
+    api_bot_names = {ch.get("name", "") for ch in channels if ch.get("name")}
+
+    # Remove bots from channels.yaml that were deleted from the API
+    local_bots = list_bots()
+    removed = 0
+    for local_name in list(local_bots.keys()):
+        if local_name not in api_bot_names and isinstance(local_bots[local_name], dict):
+            remove_bot(local_name)
+            removed += 1
+    if removed:
+        console.print(f"  [dim]Removed {removed} deleted channel(s) from local config[/dim]")
 
     synced = 0
     for ch in channels:
