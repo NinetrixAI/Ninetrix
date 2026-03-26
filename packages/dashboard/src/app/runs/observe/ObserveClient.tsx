@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
-  listThreads,
+  getThread,
   getThreadTimeline,
   checkApiStatus,
   subscribeThreadStream,
@@ -220,47 +220,55 @@ export default function ObservePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<"waterfall" | "trace">("waterfall");
 
-  // Load thread summary
-  useEffect(() => {
-    if (!threadId) return;
-    listThreads({ limit: 1, offset: 0 }).then((page) => {
-      // Find by thread_id in recent threads
-      const match = page.items.find((t) => t.thread_id === threadId);
-      if (match) setThread(match);
-    }).catch(() => {});
-  }, [threadId]);
+  // Keep a ref to the latest thread so SSE callbacks never go stale
+  const threadRef = useRef<ThreadSummary | null>(null);
+  threadRef.current = thread;
 
-  // Load timeline
+  // Load thread summary + timeline together
   useEffect(() => {
     if (!threadId) { setLoading(false); return; }
-    setLoading(true);
-    getThreadTimeline(threadId)
-      .then((events) => {
-        if (!thread) {
-          // Build a minimal summary for trace conversion
-          const stub: ThreadSummary = {
-            thread_id: threadId, agent_id: "", agent_name: "", agents: [],
-            trace_id: "", status: "in_progress", step_index: 0,
-            started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-            duration_ms: null, tokens_used: 0, model: "",
-            trigger: "api", run_cost_usd: 0, budget_usd: 0,
-            budget_soft_warned: false, rate_limited: false, rate_limit_waits: 0,
-          };
-          setNodes(timelineEventsToTraceNodes(events, stub));
-        } else {
-          setNodes(timelineEventsToTraceNodes(events, thread));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
 
-    // SSE for live threads
+    let cancelled = false;
+    setLoading(true);
+
+    // Fetch thread detail and timeline in parallel
+    Promise.all([
+      getThread(threadId),
+      getThreadTimeline(threadId),
+    ])
+      .then(([threadData, events]) => {
+        if (cancelled) return;
+        setThread(threadData);
+        setNodes(timelineEventsToTraceNodes(events, threadData));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Timeline-only fallback if thread detail fails
+        getThreadTimeline(threadId)
+          .then((events) => {
+            if (cancelled) return;
+            const stub: ThreadSummary = {
+              thread_id: threadId, agent_id: "", agent_name: "", agents: [],
+              trace_id: "", status: "in_progress", step_index: 0,
+              started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+              duration_ms: null, tokens_used: 0, model: "",
+              trigger: "api", run_cost_usd: 0, budget_usd: 0,
+              budget_soft_warned: false, rate_limited: false, rate_limit_waits: 0,
+            };
+            setNodes(timelineEventsToTraceNodes(events, stub));
+          })
+          .catch(() => {});
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+
+    // SSE for live updates — uses threadRef to always read latest thread
     const cleanup = subscribeThreadStream(
       threadId,
       (update: StreamUpdate) => {
-        if (update.events?.length && thread) {
+        const current = threadRef.current;
+        if (update.events?.length && current) {
           setNodes(timelineEventsToTraceNodes(update.events, {
-            ...thread,
+            ...current,
             status: update.status,
             step_index: update.step_index,
           }));
@@ -268,9 +276,12 @@ export default function ObservePage() {
       },
       () => {},
     );
-    return cleanup;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId, thread]);
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, [threadId]);
 
   const totalMs = useMemo(() => calcTotalMs(nodes), [nodes]);
   const totalTokens = useMemo(

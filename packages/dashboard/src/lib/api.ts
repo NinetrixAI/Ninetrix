@@ -230,6 +230,40 @@ export async function getAnalytics(days: number = 30): Promise<AnalyticsSummary>
   return apiFetch<AnalyticsSummary>(`/threads/analytics?days=${days}`);
 }
 
+export async function getThread(threadId: string): Promise<ThreadSummary> {
+  const detail = await apiFetch<{
+    thread_id: string;
+    agent_id: string;
+    agents: string[];
+    trace_id: string;
+    status: string;
+    step_index: number;
+    updated_at: string;
+    tokens_used: number;
+    model: string;
+  }>(`/threads/${encodeURIComponent(threadId)}`);
+  return {
+    thread_id: detail.thread_id,
+    agent_id: detail.agent_id,
+    agent_name: detail.agent_id,
+    agents: detail.agents,
+    trace_id: detail.trace_id,
+    status: detail.status,
+    step_index: detail.step_index,
+    started_at: detail.updated_at,
+    updated_at: detail.updated_at,
+    duration_ms: null,
+    tokens_used: detail.tokens_used,
+    model: detail.model,
+    trigger: "api",
+    run_cost_usd: 0,
+    budget_usd: 0,
+    budget_soft_warned: false,
+    rate_limited: false,
+    rate_limit_waits: 0,
+  };
+}
+
 export async function getThreadTimeline(threadId: string): Promise<TimelineEvent[]> {
   return apiFetch<TimelineEvent[]>(`/threads/${encodeURIComponent(threadId)}/timeline`);
 }

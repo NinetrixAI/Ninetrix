@@ -97,6 +97,8 @@ export default function RunsPage() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const sseCleanupRef = useRef<(() => void) | null>(null);
+  const threadsRef = useRef<ThreadSummary[]>(threads);
+  threadsRef.current = threads;
 
   // Debounced search value — avoids API call on every keystroke
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -193,7 +195,8 @@ export default function RunsPage() {
     if (sseCleanupRef.current) { sseCleanupRef.current(); sseCleanupRef.current = null; }
     if (!selectedId) { setTraceNodes([]); return; }
 
-    const thread = threads.find((t) => t.thread_id === selectedId);
+    // Use ref to always read latest threads — avoids stale closure
+    const thread = threadsRef.current.find((t) => t.thread_id === selectedId);
     if (!thread) return;
 
     setTraceLoading(true);
@@ -213,21 +216,22 @@ export default function RunsPage() {
             (update: StreamUpdate) => {
               if (update.events?.length) {
                 if (sseFirstBatch) {
-                  // First SSE batch contains full history — replace to avoid duplication
                   accEvents = update.events;
                   sseFirstBatch = false;
                 } else {
                   accEvents = [...accEvents, ...update.events];
                 }
-                const latestThread = { ...thread, status: update.status, step_index: update.step_index };
+                // Read latest thread from ref, fall back to initial thread
+                const currentThread = threadsRef.current.find((x) => x.thread_id === selectedId) ?? thread;
+                const latestThread = { ...currentThread, status: update.status, step_index: update.step_index };
                 setTraceNodes(timelineEventsToTraceNodes(accEvents, latestThread));
               }
             },
             () => {
-              // Refresh on completion
+              // Refresh on completion — use ref for fresh threads
               fetchThreads();
               getThreadTimeline(selectedId).then((ev) => {
-                const t = threads.find((x) => x.thread_id === selectedId);
+                const t = threadsRef.current.find((x) => x.thread_id === selectedId);
                 if (t) setTraceNodes(timelineEventsToTraceNodes(ev, t));
               });
             },
