@@ -48,14 +48,17 @@ class TelegramAdapter(ChannelAdapter):
     async def send_message(self, config: dict, chat_id: str, text: str) -> bool:
         bot_token = config.get("bot_token", "")
         if not bot_token:
+            print("[telegram] send_message: no bot_token in config", flush=True)
             return False
         async with httpx.AsyncClient(timeout=10) as client:
+            # Send as plain text — no parse_mode. LLM responses contain
+            # characters that break Telegram's Markdown/HTML parsers.
             resp = await client.post(
                 f"{_API.format(token=bot_token)}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                json={"chat_id": chat_id, "text": text},
             )
             if resp.status_code != 200:
-                logger.error("Telegram sendMessage failed: %s", resp.text[:300])
+                print(f"[telegram] sendMessage failed ({resp.status_code}): {resp.text[:200]}", flush=True)
                 return False
         return True
 

@@ -203,6 +203,7 @@ class Trigger(BaseModel):
     message: str = ""
     target_agent: Optional[str] = None
     channels: list[str] = Field(default_factory=list)   # channel types: ["telegram", "whatsapp"]
+    bot: str = ""                      # named bot from channels.yaml (empty = auto from channel type)
     session_mode: str = "per_chat"     # per_message | per_chat
     verbose: bool = True               # print channel I/O to agent console
     allowed_ids: list[str] = Field(default_factory=list)  # allowlist: only these user/chat IDs get responses

@@ -19,5 +19,11 @@ def _register_builtins() -> None:
     from ninetrix_channels.telegram import TelegramAdapter
     register_adapter(TelegramAdapter())
 
+    from ninetrix_channels.discord_adapter import DiscordAdapter
+    register_adapter(DiscordAdapter())
+
+    from ninetrix_channels.whatsapp import WhatsAppAdapter
+    register_adapter(WhatsAppAdapter())
+
 
 _register_builtins()

@@ -1,0 +1,69 @@
+schema_version: "1.1"
+
+# Multi-bot channel example
+#
+# Two agents, each with their own Telegram bot:
+#   - support-agent: handles customer support via @support_bot
+#   - community-agent: manages community chat via @community_bot on Discord
+#
+# Setup:
+#   ninetrix channel connect telegram --bot support_bot
+#   ninetrix channel connect discord --bot community_bot
+#   ninetrix build
+#   ninetrix run
+
+agents:
+  support-agent:
+    metadata:
+      name: support-agent
+      description: Customer support agent
+      role: Customer Support
+      goal: Help users resolve their issues quickly and clearly
+      instructions: |
+        You are a customer support agent. Be friendly, direct, and helpful.
+        Always acknowledge the user's issue before offering a solution.
+        If you can't resolve something, say so honestly.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+
+    tools:
+      - bash
+
+    triggers:
+      - type: channel
+        channels: [telegram]
+        bot: support_bot           # bot name from: ninetrix channel status
+        session_mode: per_chat
+        allowed_ids:
+          - "236242721"         # Telegram chat ID of allowed user
+        port: 9100
+
+  community-agent:
+    metadata:
+      name: community-agent
+      description: Community Discord bot
+      role: Community Manager
+      goal: Engage with the community, answer questions, and keep conversations productive
+      instructions: |
+        You are a community bot for a Discord server.
+        Be casual and friendly. Answer technical questions accurately.
+        If someone asks something off-topic, gently redirect.
+        Keep responses concise — Discord messages should be short.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.4
+
+    tools:
+      - bash
+
+    triggers:
+      - type: channel
+        channels: [discord]
+        bot: community_bot         # bot name from: ninetrix channel status
+        session_mode: per_chat
+        port: 9100

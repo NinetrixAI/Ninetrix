@@ -69,6 +69,17 @@ def _render_templates(
             _ch_pkg = Path(list(_ch_spec.submodule_search_locations)[0])
             shutil.copytree(_ch_pkg, context_dir / "ninetrix_channels", dirs_exist_ok=True)
 
+        # Bundle baileys-bridge for WhatsApp
+        _ch_types = ctx.get("channel_types", [])
+        if hasattr(_ch_types, '__iter__') and "whatsapp" in _ch_types:
+            _bridge_dir = _ch_pkg.parent / "baileys-bridge" if _ch_spec else None
+            if _bridge_dir and (_bridge_dir / "index.js").exists():
+                shutil.copytree(
+                    _bridge_dir, context_dir / "baileys-bridge",
+                    dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("node_modules"),
+                )
+
     # Copy local @Tool Python files into the build context under tools/
     if ctx.get("has_local_tools") and ctx.get("local_source_paths"):
         tools_dir = context_dir / "tools"

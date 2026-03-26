@@ -191,6 +191,46 @@ def _build_agent_env(
             if val:
                 env[aws_var] = val
 
+    # Inject channel bot configs per-agent — resolves bot names from triggers
+    # and injects AGENTFILE_CHANNEL_BOTS JSON for the in-container ChannelManager.
+    import json as _json
+    eff_triggers = af.effective_triggers(agent_def)
+    _channel_triggers = [t for t in eff_triggers if t.type == "channel"]
+    if _channel_triggers:
+        from agentfile.core.channel_config import get_bot as _get_bot, list_bots as _list_bots, find_bots_by_type as _find_bots
+
+        _bots_json: list[dict] = []
+        for ct in _channel_triggers:
+            env.setdefault("AGENTFILE_CHANNEL_SESSION_MODE", ct.session_mode)
+            env.setdefault("AGENTFILE_CHANNEL_VERBOSE", "true" if ct.verbose else "false")
+            if ct.allowed_ids:
+                env.setdefault("AGENTFILE_CHANNEL_ALLOWED_IDS", ",".join(ct.allowed_ids))
+            if ct.reject_message:
+                env.setdefault("AGENTFILE_CHANNEL_REJECT_MESSAGE", ct.reject_message)
+
+            if ct.bot:
+                _cfg = _get_bot(ct.bot)
+                if _cfg and _cfg.get("verified"):
+                    _bots_json.append({
+                        "name": ct.bot,
+                        "channel_type": _cfg.get("channel_type", ""),
+                        "bot_token": _cfg.get("bot_token", ""),
+                        "chat_id": str(_cfg.get("chat_id", "")),
+                    })
+            else:
+                for ch_type in ct.channels:
+                    for bname, bcfg in _find_bots(ch_type).items():
+                        if bcfg.get("verified"):
+                            _bots_json.append({
+                                "name": bname,
+                                "channel_type": ch_type,
+                                "bot_token": bcfg.get("bot_token", ""),
+                                "chat_id": str(bcfg.get("chat_id", "")),
+                            })
+
+        if _bots_json:
+            env["AGENTFILE_CHANNEL_BOTS"] = _json.dumps(_bots_json)
+
     # Forward known AGENTFILE_* runtime overrides from the host env.
     # Uses an allowlist to avoid leaking unrelated host env vars into containers.
     _AGENTFILE_ALLOWLIST = {
@@ -207,6 +247,7 @@ def _build_agent_env(
         "AGENTFILE_API_URL", "AGENTFILE_RUNNER_TOKEN",
         "AGENTFILE_THREAD_ID", "AGENTFILE_SYSTEM_PROMPT",
         "AGENTFILE_WEBHOOK_PORT",
+        "AGENTFILE_CHANNEL_BOTS",
         "AGENTFILE_CHANNEL_SESSION_MODE", "AGENTFILE_CHANNEL_VERBOSE",
         "AGENTFILE_CHANNEL_ALLOWED_IDS", "AGENTFILE_CHANNEL_REJECT_MESSAGE",
         "AGENTFILE_CHANNEL_LEGACY_BRIDGE",
@@ -270,6 +311,11 @@ def up_cmd(agentfile_path: str, tag: str, detach: bool) -> None:
         for e in errors:
             console.print(f"    • {e}")
         raise SystemExit(1)
+
+    # Bidirectional sync: CLI ↔ Dashboard (single source of truth)
+    from agentfile.commands.run import _sync_bots_to_api, _sync_api_to_bots
+    _sync_api_to_bots()   # API → channels.yaml (dashboard-created channels)
+    _sync_bots_to_api()   # channels.yaml → API (CLI-created channels)
 
     client = _docker_client()
     swarm = _swarm_name(af)

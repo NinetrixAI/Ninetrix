@@ -21,6 +21,7 @@ dependencies = [
     "psycopg[binary]>=3.0",
     "httpx>=0.27",
     "InquirerPy>=0.3",
+    "qrcode>=7.4",
 ]
 
 [project.scripts]

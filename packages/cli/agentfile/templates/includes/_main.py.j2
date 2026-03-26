@@ -77,6 +77,10 @@ async def main() -> None:
     })
 {% endif %}
 
+{% if has_channel_triggers %}
+    _channel_manager = None
+    _os_exit = os._exit  # capture before any scope issues in finally
+{% endif %}
     try:
         async with AsyncExitStack() as stack:
 {% if use_mcp_gateway %}
@@ -226,17 +230,33 @@ async def main() -> None:
 {% endif %}
 {% if has_channel_triggers %}
             # ── Channel Manager — persistent inbound messaging ──────────────
-            # Bridges Telegram/WhatsApp/Discord messages to the /chat handler.
+            # Reads AGENTFILE_CHANNEL_BOTS (JSON array) injected by run.py.
+            # Each entry: {name, channel_type, bot_token, chat_id, auth_dir?, enabled?}
+            # Supports multiple bots of the same channel type.
             _channel_config = {}
-{% for _ctype in channel_types %}
-            _ch_{{ _ctype }}_token = os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_BOT_TOKEN", "")
-            if _ch_{{ _ctype }}_token:
-                _channel_config["{{ _ctype }}"] = {
-                    "bot_token": _ch_{{ _ctype }}_token,
-                    "chat_id": os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_CHAT_ID", ""),
-                    "channel_id": os.environ.get("AGENTFILE_CHANNEL_{{ _ctype | upper }}_CHANNEL_ID", ""),
-                }
-{% endfor %}
+            _ch_bots_raw = os.environ.get("AGENTFILE_CHANNEL_BOTS", "")
+            if _ch_bots_raw:
+                _ch_bots_list = json.loads(_ch_bots_raw)
+                for _bot_entry in _ch_bots_list:
+                    _bot_name = _bot_entry.get("name", "")
+                    _bot_type = _bot_entry.get("channel_type", "")
+                    if not _bot_name or not _bot_type:
+                        continue
+                    if _bot_type == "whatsapp":
+                        _channel_config[_bot_name] = {
+                            "channel_type": "whatsapp",
+                            "auth_dir": _bot_entry.get("auth_dir", "/data/whatsapp"),
+                            "socket_path": "/var/run/whatsapp.sock",
+                            "bridge_script": "/opt/channels/baileys-bridge/index.js",
+                        }
+                    else:
+                        _bot_token = _bot_entry.get("bot_token", "")
+                        if _bot_token:
+                            _channel_config[_bot_name] = {
+                                "channel_type": _bot_type,
+                                "bot_token": _bot_token,
+                                "chat_id": _bot_entry.get("chat_id", ""),
+                            }
 
             _channel_manager = None
             _ch_verbose = os.environ.get("AGENTFILE_CHANNEL_VERBOSE", "true").lower() in ("1", "true", "yes")
@@ -254,8 +274,6 @@ async def main() -> None:
                             highlight=False,
                         )
                     _ch_body = {"message": text, "session_id": session_id, "channel_type": channel_type}
-                    # Call the /chat endpoint internally via HTTP to reuse all
-                    # existing session management, telemetry, and checkpointing.
                     try:
                         async with _ch_httpx.AsyncClient(timeout=300) as _ch_client:
                             _ch_resp = await _ch_client.post(
@@ -282,13 +300,21 @@ async def main() -> None:
                     return _ch_response
 
                 _ch_session_mode = os.environ.get("AGENTFILE_CHANNEL_SESSION_MODE", "per_chat")
+                _ch_allowed_raw = os.environ.get("AGENTFILE_CHANNEL_ALLOWED_IDS", "")
+                _ch_allowed_ids = [x.strip() for x in _ch_allowed_raw.split(",") if x.strip()] if _ch_allowed_raw else None
+                _ch_reject_msg = os.environ.get("AGENTFILE_CHANNEL_REJECT_MESSAGE", "")
                 _channel_manager = ChannelManager(
                     _channel_config, _channel_agent_callback,
                     session_mode=_ch_session_mode,
+                    allowed_ids=_ch_allowed_ids,
+                    reject_message=_ch_reject_msg,
                 )
                 await _channel_manager.start()
-                _ch_names = ", ".join(_channel_config.keys())
-                print(f"Channel manager started: {_ch_names}")
+                _ch_names = ", ".join(f"{k}({v.get('channel_type','')})" for k, v in _channel_config.items())
+                if _ch_allowed_ids:
+                    print(f"Channel manager started: {_ch_names} (allowed: {len(_ch_allowed_ids)} IDs)")
+                else:
+                    print(f"Channel manager started: {_ch_names} (open — no allowlist)")
 {% endif %}
 {% if has_schedule_triggers %}
             _scheduler = AsyncIOScheduler()
@@ -306,8 +332,18 @@ async def main() -> None:
             print("Agent ready — waiting for triggers.\n")
 {% elif has_channel_triggers and not has_webhook_triggers and not has_schedule_triggers %}
             # Channel-only mode — ChannelManager handles messages, keep alive.
+            # Use a shared Event so the finally block can trigger clean shutdown.
+            _shutdown_event = asyncio.Event()
+            for _sig_name in ("SIGINT", "SIGTERM"):
+                try:
+                    asyncio.get_event_loop().add_signal_handler(
+                        getattr(__import__("signal"), _sig_name),
+                        _shutdown_event.set,
+                    )
+                except (NotImplementedError, AttributeError):
+                    pass
             print("Agent ready — listening on channels.\n")
-            await asyncio.Event().wait()
+            await _shutdown_event.wait()
 {% elif has_any_triggers %}
             print("Agent ready — waiting for triggers.\n")
 {% elif has_invoke_server %}
@@ -525,9 +561,15 @@ async def main() -> None:
 {% if has_channel_triggers %}
         try:
             if _channel_manager is not None:
-                asyncio.get_event_loop().run_until_complete(_channel_manager.stop())
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running():
+                    _loop.run_until_complete(_channel_manager.stop())
         except Exception:
             pass
+        # Force exit — discord.py keeps internal gateway tasks alive
+        # that prevent normal asyncio.run() from completing.
+        print("\nShutting down.", flush=True)
+        _os_exit(0)
 {% endif %}
 {% if has_webhook_triggers or has_channel_triggers or is_multi_agent or is_saas_runner %}
         try:

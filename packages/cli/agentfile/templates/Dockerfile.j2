@@ -66,6 +66,24 @@ COPY entrypoint.py /app/entrypoint.py
 # Copy ninetrix-channels package (not on PyPI — bundled from host)
 COPY ninetrix_channels/ /app/ninetrix_channels/
 ENV PYTHONPATH="/app:${PYTHONPATH}"
+{% if "whatsapp" in channel_types %}
+
+# Install Node.js for WhatsApp Baileys bridge (if not already installed)
+{% if not collected_deps.npm and not has_npm_packages %}
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && apt-get install -y --no-install-recommends curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs
+{% endif %}
+
+# Copy and install Baileys bridge (needs git for some transitive deps)
+RUN apt-get update && apt-get install -y --no-install-recommends git
+COPY baileys-bridge/ /opt/channels/baileys-bridge/
+RUN cd /opt/channels/baileys-bridge && npm install --production
+
+# WhatsApp auth state volume mount point
+VOLUME ["/data/whatsapp"]
+{% endif %}
 {% endif %}
 {% if has_local_tools %}
 

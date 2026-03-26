@@ -21,6 +21,7 @@ from rich.prompt import Prompt
 
 from agentfile.core.channel_config import (
     get_channel, save_channel, remove_channel,
+    get_bot, save_bot, remove_bot, list_bots, is_bot_verified,
 )
 
 console = Console()
@@ -158,7 +159,7 @@ def _register_with_api(
         return False
 
 
-def setup_telegram_interactive(agent_name: str | None = None) -> bool:
+def setup_telegram_interactive(agent_name: str | None = None, bot_name: str | None = None) -> bool:
     """Interactive Telegram setup flow. Returns True if verified successfully."""
     console.print()
     console.print(Panel(
@@ -171,9 +172,10 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
     console.print()
 
     # Check if already configured
-    existing = get_channel("telegram")
+    _bot_key = bot_name or "telegram"
+    existing = get_bot(_bot_key)
     if existing and existing.get("verified"):
-        console.print(f"  [green]✓[/green] Telegram already connected: [bold]@{existing.get('bot_username', '?')}[/bold]")
+        console.print(f"  [green]✓[/green] Telegram already connected: [bold]@{existing.get('bot_username', '?')}[/bold] (bot: {_bot_key})")
         reconfig = Prompt.ask("  Reconfigure?", choices=["y", "n"], default="n")
         if reconfig == "n":
             return True
@@ -209,8 +211,15 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
     # Delete any existing webhook so polling works (for local mode)
     _delete_telegram_webhook(token)
 
+    # Auto-name the bot after the username if no explicit name given
+    if not bot_name:
+        _bot_key = bot_username or "telegram"
+    else:
+        _bot_key = bot_name
+
     # Save config immediately (even before verification)
-    save_channel("telegram", {
+    save_bot(_bot_key, {
+        "channel_type": "telegram",
         "bot_token": token,
         "bot_username": bot_username,
         "verified": False,
@@ -260,7 +269,8 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
     console.print(f"\r  [green]✓[/green] Connected! Chat ID: [bold]{chat_id}[/bold]                       ")
 
     # Save verified config locally
-    save_channel("telegram", {
+    save_bot(_bot_key, {
+        "channel_type": "telegram",
         "bot_token": token,
         "bot_username": bot_username,
         "chat_id": chat_id,
@@ -272,7 +282,7 @@ def setup_telegram_interactive(agent_name: str | None = None) -> bool:
 
     console.print()
     console.print(f"  [green]Done![/green] Messages to [bold]@{bot_username}[/bold] will trigger your agent.")
-    console.print("  [dim]Config saved to ~/.agentfile/channels.yaml[/dim]")
+    console.print(f"  [dim]Bot name: {_bot_key} — Config saved to ~/.agentfile/channels.yaml[/dim]")
     console.print()
 
     return True
@@ -298,7 +308,7 @@ def _validate_discord_token(token: str) -> dict | None:
     return None
 
 
-def setup_discord_interactive(agent_name: str | None = None) -> bool:
+def setup_discord_interactive(agent_name: str | None = None, bot_name: str | None = None) -> bool:
     """Interactive Discord setup flow. Returns True if setup succeeded."""
     console.print()
     console.print(Panel(
@@ -311,9 +321,10 @@ def setup_discord_interactive(agent_name: str | None = None) -> bool:
     console.print()
 
     # Check if already configured
-    existing = get_channel("discord")
+    _bot_key = bot_name or "discord"
+    existing = get_bot(_bot_key)
     if existing and existing.get("verified"):
-        console.print(f"  [green]✓[/green] Discord already connected: [bold]{existing.get('bot_username', '?')}[/bold]")
+        console.print(f"  [green]✓[/green] Discord already connected: [bold]{existing.get('bot_username', '?')}[/bold] (bot: {_bot_key})")
         reconfig = Prompt.ask("  Reconfigure?", choices=["y", "n"], default="n")
         if reconfig == "n":
             return True
@@ -365,8 +376,13 @@ def setup_discord_interactive(agent_name: str | None = None) -> bool:
 
     Prompt.ask("  [dim]Press Enter when done[/dim]", default="")
 
+    # Auto-name after bot username if no explicit name
+    if not bot_name:
+        _bot_key = bot_username or "discord"
+
     # Save config
-    save_channel("discord", {
+    save_bot(_bot_key, {
+        "channel_type": "discord",
         "bot_token": token,
         "bot_username": bot_username,
         "application_id": application_id,
@@ -378,7 +394,7 @@ def setup_discord_interactive(agent_name: str | None = None) -> bool:
 
     console.print()
     console.print(f"  [green]Done![/green] Mention [bold]@{bot_username}[/bold] in any server channel to trigger your agent.")
-    console.print("  [dim]Config saved to ~/.agentfile/channels.yaml[/dim]")
+    console.print(f"  [dim]Bot name: {_bot_key} — Config saved to ~/.agentfile/channels.yaml[/dim]")
     console.print()
 
     return True
@@ -590,8 +606,8 @@ def setup_whatsapp_interactive(agent_name: str | None = None) -> bool:
     proc = subprocess.Popen(
         ["node", str(bridge_dir / "index.js")],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=sys.stderr,   # show bridge logs (loading, connecting, etc.)
+        stderr=sys.stderr,
     )
 
     # Wait for socket
@@ -599,8 +615,7 @@ def setup_whatsapp_interactive(agent_name: str | None = None) -> bool:
         if sock_path.exists():
             break
         if proc.poll() is not None:
-            output = proc.stdout.read().decode() if proc.stdout else ""
-            console.print(f"  [red]Bridge exited:[/red] {output[:300]}")
+            console.print(f"  [red]Bridge exited with code {proc.returncode}. Check logs above.[/red]")
             return False
         time.sleep(1)
     else:
@@ -721,53 +736,109 @@ def channel_cmd():
 @channel_cmd.command("connect")
 @click.argument("platform", type=click.Choice(["telegram", "discord", "whatsapp"]))
 @click.option("--agent", "-a", default=None, help="Agent name to bind to this channel")
-def connect(platform: str, agent: str | None):
+@click.option("--bot", "-b", "bot_name", default=None, help="Bot name (for multiple bots of same type)")
+def connect(platform: str, agent: str | None, bot_name: str | None):
     """Connect a messaging platform to your agents."""
     if platform == "telegram":
-        setup_telegram_interactive(agent_name=agent)
+        setup_telegram_interactive(agent_name=agent, bot_name=bot_name)
     elif platform == "discord":
-        setup_discord_interactive(agent_name=agent)
+        setup_discord_interactive(agent_name=agent, bot_name=bot_name)
     elif platform == "whatsapp":
         setup_whatsapp_interactive(agent_name=agent)
 
 
 @channel_cmd.command("disconnect")
-@click.argument("platform", type=click.Choice(["telegram", "discord", "whatsapp"]))
-def disconnect(platform: str):
-    """Remove a messaging platform connection."""
-    ch = get_channel(platform)
+@click.argument("bot_name_arg", metavar="BOT_NAME")
+def disconnect(bot_name_arg: str):
+    """Remove a bot connection by name (e.g. 'support_bot', 'telegram')."""
+    ch = get_bot(bot_name_arg)
     if not ch:
-        console.print(f"  [dim]{platform} is not connected.[/dim]")
+        console.print(f"  [dim]Bot '{bot_name_arg}' is not configured.[/dim]")
+        console.print(f"  [dim]Run: ninetrix channel status[/dim]")
         return
 
+    ch_type = ch.get("channel_type", "")
+
     # Delete webhook before removing config (Telegram only)
-    if platform == "telegram" and ch.get("bot_token"):
+    if ch_type == "telegram" and ch.get("bot_token"):
         _delete_telegram_webhook(ch["bot_token"])
 
-    remove_channel(platform)
-    console.print(f"  [green]✓[/green] {platform} disconnected.")
+    # Delete WhatsApp auth state (credentials, session keys)
+    if ch_type == "whatsapp":
+        import shutil
+        auth_dir = ch.get("auth_dir", str(_WA_AUTH_DIR))
+        auth_path = Path(auth_dir)
+        if auth_path.exists():
+            shutil.rmtree(auth_path, ignore_errors=True)
+            console.print(f"  [dim]Deleted auth state at {auth_path}[/dim]")
+
+    remove_bot(bot_name_arg)
+    console.print(f"  [green]✓[/green] {bot_name_arg} ({ch_type}) disconnected.")
     console.print("  [dim]Removed from ~/.agentfile/channels.yaml[/dim]")
+
+
+@channel_cmd.command("rename")
+@click.argument("old_name")
+@click.argument("new_name")
+def rename(old_name: str, new_name: str):
+    """Rename a bot (e.g. 'telegram' → 'support_bot')."""
+    bot = get_bot(old_name)
+    if not bot:
+        console.print(f"  [red]Bot '{old_name}' not found.[/red]")
+        return
+    if get_bot(new_name):
+        console.print(f"  [red]Bot '{new_name}' already exists.[/red]")
+        return
+    save_bot(new_name, bot)
+    remove_bot(old_name)
+    console.print(f"  [green]✓[/green] Renamed [bold]{old_name}[/bold] → [bold]{new_name}[/bold]")
+    console.print(f"  [dim]Use bot: {new_name} in your agentfile.yaml triggers[/dim]")
+    # Sync to API dashboard
+    try:
+        from agentfile.commands.run import _sync_bots_to_api
+        _sync_bots_to_api()
+    except Exception:
+        pass
 
 
 @channel_cmd.command("status")
 def status():
-    """Show connected channels."""
+    """Show all connected bots."""
+    # Sync from API first so dashboard-created channels appear
+    try:
+        from agentfile.commands.run import _sync_api_to_bots
+        _sync_api_to_bots()
+    except Exception:
+        pass
+
     console.print()
     console.print("[bold]Channels[/bold]\n")
 
-    found = False
-    for platform in ["telegram", "discord", "whatsapp"]:
-        ch = get_channel(platform)
-        if ch:
-            found = True
-            verified = ch.get("verified", False)
-            status_str = "[green]✓ verified[/green]" if verified else "[yellow]⚠ not verified[/yellow]"
-            bot = ch.get("bot_username", "?")
-            console.print(f"  {platform:12s}  @{bot:20s}  {status_str}")
-
-    if not found:
+    bots = list_bots()
+    if not bots:
         console.print("  [dim]No channels connected.[/dim]")
-        console.print("  [dim]Run: ninetrix channel connect telegram[/dim]")
-        console.print("  [dim]      ninetrix channel connect discord[/dim]")
+        console.print("  [dim]Run: ninetrix channel connect telegram --bot my_bot[/dim]")
+        console.print("  [dim]      ninetrix channel connect discord --bot my_discord[/dim]")
+        console.print()
+        return
 
+    console.print(f"  {'BOT NAME':20s}  {'TYPE':10s}  {'USERNAME':20s}  {'STATUS'}")
+    console.print(f"  {'─' * 20}  {'─' * 10}  {'─' * 20}  {'─' * 12}")
+    for name, cfg in sorted(bots.items()):
+        if not isinstance(cfg, dict):
+            continue
+        ch_type = cfg.get("channel_type", "?")
+        verified = cfg.get("verified", False)
+        status_str = "[green]✓ verified[/green]" if verified else "[yellow]⚠ pending[/yellow]"
+        username = cfg.get("bot_username") or cfg.get("phone_number") or "?"
+        console.print(f"  {name:20s}  {ch_type:10s}  {username:20s}  {status_str}")
+
+    console.print()
+    console.print("  [dim]Usage in agentfile.yaml:[/dim]")
+    console.print("  [dim]  triggers:[/dim]")
+    console.print("  [dim]    - type: channel[/dim]")
+    console.print("  [dim]      channels: [telegram][/dim]")
+    console.print("  [dim]      bot: <bot_name>      # from table above[/dim]")
+    console.print()
+    console.print("  [dim]Commands: connect, disconnect, rename, status[/dim]")
     console.print()

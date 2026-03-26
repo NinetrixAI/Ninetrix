@@ -1,0 +1,100 @@
+schema_version: "1.1"
+
+# Channel + Collaborators example
+#
+# A front-desk agent on Telegram receives all messages and delegates
+# to specialist agents via the collaborator system. Users only talk
+# to one bot — the routing happens behind the scenes.
+#
+# Architecture:
+#   User → Telegram @support_bot → front-desk → transfer_to_agent →
+#     → researcher (no channel, invoke-only)
+#     → coder (no channel, invoke-only)
+#   ← response flows back through front-desk → Telegram
+#
+# Setup:
+#   ninetrix channel connect telegram --bot support_bot
+#   ninetrix build
+#   ninetrix up
+
+agents:
+  front-desk:
+    metadata:
+      name: front-desk
+      description: Front-desk agent — routes messages to the right specialist
+      role: Front Desk Router
+      goal: Quickly understand what the user needs and delegate to the right specialist
+      instructions: |
+        You are the front desk. You receive all incoming messages.
+
+        Your job:
+        1. Understand what the user needs
+        2. Delegate to the right specialist using transfer_to_agent
+        3. Return the specialist's response to the user
+
+        Available specialists:
+        - researcher: for questions about facts, lookups, research, analysis
+        - coder: for code writing, debugging, technical implementation
+
+        Rules:
+        - For simple greetings or small talk, respond yourself — don't delegate
+        - For anything technical or requiring research, ALWAYS delegate
+        - Never say "let me transfer you" — just do it silently
+        - Return the specialist's response as-is, don't rephrase it
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+
+    tools:
+      - bash
+
+    collaborators: [researcher, coder]
+
+    triggers:
+      - type: channel
+        channels: [telegram]
+        bot: support_bot
+        session_mode: per_chat
+        allowed_ids:
+          - "236242721"
+        port: 9100
+
+  researcher:
+    metadata:
+      name: researcher
+      description: Research specialist — looks up information and analyzes data
+      role: Research Analyst
+      goal: Find accurate information and provide clear analysis
+      instructions: |
+        You are a research specialist. You receive delegated tasks from the front desk.
+        Use bash to search, look up information, or analyze data.
+        Be thorough but concise. Return facts, not fluff.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.2
+
+    tools:
+      - bash
+
+  coder:
+    metadata:
+      name: coder
+      description: Coding specialist — writes and debugs code
+      role: Software Engineer
+      goal: Write clean, working code and debug issues
+      instructions: |
+        You are a coding specialist. You receive delegated tasks from the front desk.
+        Write clean, working code. Test it with bash when possible.
+        Be concise — no lengthy explanations unless asked.
+
+    runtime:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      temperature: 0.1
+
+    tools:
+      - bash

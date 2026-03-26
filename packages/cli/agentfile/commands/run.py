@@ -157,6 +157,166 @@ def _inject_integration_credentials(env: dict[str, str]) -> None:
         pass
 
 
+def _sync_bots_to_api() -> None:
+    """Push all bots from channels.yaml to the local API DB.
+
+    This keeps the dashboard in sync with the CLI. Called on startup
+    (ninetrix run / ninetrix up). Creates or updates channels in the API.
+    """
+    from agentfile.core.config import resolve_api_url
+    from agentfile.core.channel_config import list_bots
+
+    api_url = resolve_api_url()
+    if not api_url:
+        return
+
+    # Use machine secret for local API (auth_headers may return stale SaaS token)
+    _secret_file = Path.home() / ".agentfile" / ".api-secret"
+    if _secret_file.exists():
+        _secret = _secret_file.read_text().strip()
+        headers = {"Authorization": f"Bearer {_secret}"}
+    else:
+        from agentfile.core.auth import auth_headers
+        headers = auth_headers(api_url)
+    if not headers:
+        return
+
+    bots = list_bots()
+    if not bots:
+        return
+
+    synced = 0
+    for bot_name, cfg in bots.items():
+        if not isinstance(cfg, dict) or not cfg.get("verified"):
+            continue
+        ch_type = cfg.get("channel_type", "")
+        if not ch_type:
+            continue
+
+        try:
+            # Check if channel already exists in API by searching for matching bot_token
+            resp = httpx.get(f"{api_url}/v1/channels", headers=headers, timeout=5)
+            existing = None
+            if resp.status_code == 200:
+                for ch in resp.json():
+                    if ch.get("config", {}).get("bot_token") == cfg.get("bot_token", ""):
+                        existing = ch
+                        break
+                    # Match by name for channels without bot_token (whatsapp)
+                    if ch.get("name") == bot_name and ch.get("channel_type") == ch_type:
+                        existing = ch
+                        break
+
+            if existing:
+                # Update name if changed
+                if existing.get("name") != bot_name:
+                    httpx.patch(
+                        f"{api_url}/v1/channels/{existing['id']}",
+                        headers=headers,
+                        json={"name": bot_name},
+                        timeout=5,
+                    )
+                    synced += 1
+            else:
+                # Create new channel in API
+                config_payload = {"bot_token": cfg.get("bot_token", "")}
+                if cfg.get("chat_id"):
+                    config_payload["chat_id"] = str(cfg["chat_id"])
+                if cfg.get("bot_username"):
+                    config_payload["bot_username"] = cfg["bot_username"]
+
+                resp = httpx.post(
+                    f"{api_url}/v1/channels",
+                    headers=headers,
+                    json={
+                        "channel_type": ch_type,
+                        "name": bot_name,
+                        "config": config_payload,
+                        "session_mode": "per_chat",
+                        "routing_mode": "single",
+                    },
+                    timeout=10,
+                )
+                if resp.status_code in (200, 201):
+                    ch_data = resp.json()
+                    # Auto-verify
+                    code = ch_data.get("config", {}).get("verification_code", "000000")
+                    httpx.post(
+                        f"{api_url}/v1/channels/{ch_data['id']}/verify",
+                        headers=headers,
+                        json={"code": code},
+                        timeout=5,
+                    )
+                    synced += 1
+        except httpx.ConnectError:
+            return  # API not running
+        except Exception:
+            pass
+
+    if synced:
+        console.print(f"  [dim]Synced {synced} channel(s) to dashboard[/dim]")
+
+
+def _sync_api_to_bots() -> None:
+    """Pull channels from the API DB into channels.yaml.
+
+    This keeps the CLI in sync with the dashboard. Called on startup
+    alongside _sync_bots_to_api() for bidirectional sync.
+    """
+    from agentfile.core.config import resolve_api_url
+    from agentfile.core.channel_config import get_bot, save_bot
+
+    api_url = resolve_api_url()
+    if not api_url:
+        return
+
+    _secret_file = Path.home() / ".agentfile" / ".api-secret"
+    if _secret_file.exists():
+        _secret = _secret_file.read_text().strip()
+        headers = {"Authorization": f"Bearer {_secret}"}
+    else:
+        from agentfile.core.auth import auth_headers
+        headers = auth_headers(api_url)
+    if not headers:
+        return
+
+    try:
+        resp = httpx.get(f"{api_url}/v1/channels", headers=headers, timeout=5)
+        if resp.status_code != 200:
+            return
+        channels = resp.json()
+    except Exception:
+        return
+
+    synced = 0
+    for ch in channels:
+        if not ch.get("verified"):
+            continue
+        bot_name = ch.get("name", "")
+        ch_type = ch.get("channel_type", "")
+        config = ch.get("config", {})
+        if not bot_name or not ch_type:
+            continue
+
+        # Skip if already exists in channels.yaml with same token
+        existing = get_bot(bot_name)
+        if existing and existing.get("bot_token") == config.get("bot_token", ""):
+            continue
+
+        # Save to channels.yaml
+        save_bot(bot_name, {
+            "channel_type": ch_type,
+            "bot_token": config.get("bot_token", ""),
+            "bot_username": config.get("bot_username", ""),
+            "chat_id": config.get("chat_id", ""),
+            "verified": True,
+        })
+        synced += 1
+
+    if synced:
+        console.print(f"  [dim]Synced {synced} channel(s) from dashboard[/dim]")
+
+
 def _try_sync_channel_from_api(channel_type: str) -> bool:
     """Check the local API for a verified channel and sync to channels.yaml.
 
@@ -419,36 +579,37 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
     # Effective triggers for the entry agent
     eff_triggers = af.effective_triggers(agent)
 
+    # Bidirectional sync: CLI ↔ Dashboard (single source of truth)
+    _sync_api_to_bots()   # API → channels.yaml (dashboard-created channels)
+    _sync_bots_to_api()   # channels.yaml → API (CLI-created channels)
+
     # Auto-prompt channel setup if agentfile has channel triggers
     channel_triggers = [t for t in eff_triggers if t.type == "channel"]
     if channel_triggers:
-        from agentfile.core.channel_config import is_verified, get_channel as _get_ch_cfg
+        from agentfile.core.channel_config import is_bot_verified, get_bot as _get_bot_cfg, find_bots_by_type
         for ct in channel_triggers:
-            for ch_type in ct.channels:
-                if not is_verified(ch_type):
-                    # Check if the API has a verified channel (e.g. set up via dashboard)
-                    _try_sync_channel_from_api(ch_type)
-                if not is_verified(ch_type):
-                    console.print(
-                        f"  [yellow]📱 {ch_type.title()} channel detected but not configured.[/yellow]\n"
-                    )
-                    if ch_type == "telegram":
-                        from agentfile.commands.channel import setup_telegram_interactive
-                        ok = setup_telegram_interactive(agent_name=agent.name)
-                    elif ch_type == "discord":
-                        from agentfile.commands.channel import setup_discord_interactive
-                        ok = setup_discord_interactive(agent_name=agent.name)
-                    elif ch_type == "whatsapp":
-                        from agentfile.commands.channel import setup_whatsapp_interactive
-                        ok = setup_whatsapp_interactive(agent_name=agent.name)
-                    else:
-                        ok = False
-                    if not ok:
-                        console.print(f"  [dim]Skipping {ch_type} setup. Run later:[/dim] [bold]ninetrix channel connect {ch_type}[/bold]\n")
+            if ct.bot:
+                # Explicit bot name — check if it's configured
+                if not is_bot_verified(ct.bot):
+                    ch_type = ct.channels[0] if ct.channels else "telegram"
+                    console.print(f"  [yellow]📱 Bot '{ct.bot}' not configured.[/yellow]")
+                    console.print(f"  [dim]Run: ninetrix channel connect {ch_type} --bot {ct.bot}[/dim]\n")
                 else:
-                    _ch_cfg = _get_ch_cfg(ch_type)
-                    _bot = _ch_cfg.get("bot_username", "?") if _ch_cfg else "?"
-                    console.print(f"  [green]✓[/green] {ch_type.title()} connected: [bold]@{_bot}[/bold]\n")
+                    _bcfg = _get_bot_cfg(ct.bot)
+                    _label = (_bcfg.get("bot_username") or _bcfg.get("phone_number") or "?") if _bcfg else "?"
+                    console.print(f"  [green]✓[/green] {ct.bot} connected: [bold]{_label}[/bold]\n")
+            else:
+                # No explicit bot — check each channel type has at least one verified bot
+                for ch_type in ct.channels:
+                    bots = find_bots_by_type(ch_type)
+                    verified = {n: c for n, c in bots.items() if c.get("verified")}
+                    if not verified:
+                        console.print(f"  [yellow]📱 No {ch_type} bot configured.[/yellow]")
+                        console.print(f"  [dim]Run: ninetrix channel connect {ch_type}[/dim]\n")
+                    else:
+                        for bname, bcfg in verified.items():
+                            _label = bcfg.get("bot_username") or bcfg.get("phone_number") or "?"
+                            console.print(f"  [green]✓[/green] {bname} ({ch_type}): [bold]{_label}[/bold]")
 
     webhook_triggers = [t for t in eff_triggers if t.type in ("webhook", "channel")]
     port_bindings: list[str] = []
@@ -532,16 +693,15 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
         if _k in _AGENTFILE_ALLOWLIST or _k.startswith("AGENTFILE_CHANNEL_") or _k.startswith("AGENTFILE_VOL_") or _k.startswith("AGENTFILE_PEER_"):
             env.setdefault(_k, _v)
 
-    # Inject channel credentials into container env vars.
-    # The in-container ChannelManager reads these to connect to platforms.
+    # Inject channel bot configs into container as JSON env var.
+    # The in-container ChannelManager reads AGENTFILE_CHANNEL_BOTS to spawn adapters.
     _bridge = None
     if channel_triggers:
-        from agentfile.core.channel_config import is_verified as _ch_verified, get_channel as _get_ch
+        import json as _json
+        from agentfile.core.channel_config import get_bot as _get_bot, list_bots as _list_bots
 
-        _all_channel_types: set[str] = set()
+        # Collect trigger-level settings
         for ct in channel_triggers:
-            _all_channel_types.update(ct.channels)
-            # Inject session_mode, verbose, and access control from the trigger config
             env.setdefault("AGENTFILE_CHANNEL_SESSION_MODE", ct.session_mode)
             env.setdefault("AGENTFILE_CHANNEL_VERBOSE", "true" if ct.verbose else "false")
             if ct.allowed_ids:
@@ -549,45 +709,55 @@ def run_cmd(agentfile_path: str, image: str | None, tag: str, extra_env: tuple[s
             if ct.reject_message:
                 env.setdefault("AGENTFILE_CHANNEL_REJECT_MESSAGE", ct.reject_message)
 
+        # Resolve which bots to inject.
+        # If trigger has bot: field, use that specific bot.
+        # Otherwise, find all verified bots matching the channel types.
+        _bots_to_inject: dict[str, dict] = {}
         _wa_volume: str | None = None
-        for _ch_type in sorted(_all_channel_types):
-            _ch_cfg = _get_ch(_ch_type)
-            if _ch_cfg and _ch_cfg.get("verified"):
-                _prefix = f"AGENTFILE_CHANNEL_{_ch_type.upper()}"
-                if _ch_cfg.get("bot_token"):
-                    env[f"{_prefix}_BOT_TOKEN"] = _ch_cfg["bot_token"]
-                if _ch_cfg.get("chat_id"):
-                    env[f"{_prefix}_CHAT_ID"] = str(_ch_cfg["chat_id"])
 
-                # WhatsApp: mount auth dir as volume + set env vars
-                if _ch_type == "whatsapp":
-                    _wa_auth = _ch_cfg.get("auth_dir", str(Path.home() / ".agentfile" / "whatsapp-auth"))
-                    env[f"{_prefix}_AUTH_DIR"] = "/data/whatsapp"
-                    env[f"{_prefix}_ENABLED"] = "true"
-                    _wa_volume = f"{_wa_auth}:/data/whatsapp"
+        for ct in channel_triggers:
+            if ct.bot:
+                # Explicit bot name from agentfile.yaml trigger
+                _cfg = _get_bot(ct.bot)
+                if _cfg and _cfg.get("verified"):
+                    _bots_to_inject[ct.bot] = _cfg
+                else:
+                    console.print(f"  [yellow]Bot '{ct.bot}' not found or not verified.[/yellow]")
+                    console.print(f"  [dim]Run: ninetrix channel connect {ct.channels[0] if ct.channels else 'telegram'} --bot {ct.bot}[/dim]\n")
+            else:
+                # No explicit bot — find all verified bots for each channel type
+                all_bots = _list_bots()
+                for ch_type in ct.channels:
+                    for bname, bcfg in all_bots.items():
+                        if isinstance(bcfg, dict) and bcfg.get("channel_type") == ch_type and bcfg.get("verified"):
+                            _bots_to_inject[bname] = bcfg
 
-                _ch_label = _ch_cfg.get("bot_username") or _ch_cfg.get("phone_number") or _ch_type
-                console.print(
-                    f"  [green]📱 {_ch_type.title()} channel:[/green] "
-                    f"credentials injected into container (@{_ch_label})"
-                )
+        # Build the JSON config and inject env vars
+        _bots_json: list[dict] = []
+        for bname, bcfg in sorted(_bots_to_inject.items()):
+            ch_type = bcfg.get("channel_type", "")
+            bot_entry = {
+                "name": bname,
+                "channel_type": ch_type,
+                "bot_token": bcfg.get("bot_token", ""),
+                "chat_id": str(bcfg.get("chat_id", "")),
+            }
 
-        # Fallback: start external ChannelBridge for Telegram if the
-        # container doesn't have ninetrix-channels installed (e.g. old image).
-        # New images use the in-container ChannelManager instead.
-        _use_legacy_bridge = os.environ.get("AGENTFILE_CHANNEL_LEGACY_BRIDGE", "").lower() in ("1", "true")
-        if _use_legacy_bridge:
-            for ct in channel_triggers:
-                if "telegram" in ct.channels and _ch_verified("telegram"):
-                    from agentfile.core.channel_bridge import ChannelBridge
-                    _bridge_port = ct.port or 9100
-                    _bridge_endpoint = ct.endpoint or "/run"
-                    _bridge = ChannelBridge(agent_port=_bridge_port, agent_name=agent.name, endpoint=_bridge_endpoint)
-                    if _bridge.start():
-                        tg_cfg = _get_ch("telegram")
-                        bot_name = tg_cfg.get("bot_username", "?") if tg_cfg else "?"
-                        console.print(f"  [green]📱 Telegram bridge active (legacy):[/green] @{bot_name} → localhost:{_bridge_port}/run\n")
-                    break
+            # WhatsApp: mount auth dir as volume
+            if ch_type == "whatsapp":
+                _wa_auth = bcfg.get("auth_dir", str(Path.home() / ".agentfile" / "whatsapp-auth"))
+                bot_entry["auth_dir"] = "/data/whatsapp"
+                bot_entry["enabled"] = True
+                _wa_volume = f"{_wa_auth}:/data/whatsapp"
+
+            _bots_json.append(bot_entry)
+            _ch_label = bcfg.get("bot_username") or bcfg.get("phone_number") or bname
+            console.print(
+                f"  [green]📱 {bname}[/green] ({ch_type}) → @{_ch_label}"
+            )
+
+        if _bots_json:
+            env["AGENTFILE_CHANNEL_BOTS"] = _json.dumps(_bots_json)
 
     # Mount WhatsApp auth volume if configured
     if channel_triggers and _wa_volume:
