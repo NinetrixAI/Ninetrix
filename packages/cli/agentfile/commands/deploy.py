@@ -230,6 +230,15 @@ def deploy_cmd(
     else:
         _print_summary(results)
 
+    # Open deployment in browser if requested
+    if open_browser and results:
+        import webbrowser
+        for r in results:
+            if r.deployment_id:
+                deploy_url = f"{_APP_URL}/deployments/{r.deployment_id}"
+                console.print(f"  [dim]Opening:[/dim] {deploy_url}")
+                webbrowser.open(deploy_url)
+
     # Exit non-zero if any failed
     if any(r.error for r in results):
         raise SystemExit(1)
@@ -373,12 +382,3 @@ def _print_summary(results) -> None:
         console.print(f"  [green]{ok} deployed[/green], [red]{fail} failed[/red]\n")
     else:
         console.print(f"  [green]✓ {ok} agent(s) deployed successfully[/green]\n")
-
-    # Open deployment in browser if requested or first-time deploy
-    if open_browser and results:
-        import webbrowser
-        for r in results:
-            if r.deployment_id:
-                deploy_url = f"{_APP_URL}/deployments/{r.deployment_id}"
-                console.print(f"  [dim]Opening:[/dim] {deploy_url}")
-                webbrowser.open(deploy_url)
