@@ -1,8 +1,13 @@
 """ninetrix auth — manage authentication with the Ninetrix API."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
+import secrets
+import time
+import webbrowser
 
 import click
 import httpx
@@ -14,6 +19,7 @@ from agentfile.core.auth import (
     TOKEN_FILE,
     auth_headers,
     clear_token,
+    save_auth,
     save_token,
 )
 from agentfile.core.config import (
@@ -27,6 +33,122 @@ from agentfile.core.config import (
 console = Console()
 
 
+# ── Browser auth flow (PKCE) ────────────────────────────────────────────────
+
+def cli_auth_flow(api_url: str | None = None) -> bool:
+    """Run the browser-based OAuth flow. Returns True if authenticated.
+
+    1. Generate PKCE code_verifier + code_challenge
+    2. POST /v1/auth/cli/start → get session_id, auth_url, confirm_code
+    3. Open browser
+    4. Poll until completed
+    5. Save tokens
+    """
+    url = api_url or get_api_url() or _CLOUD_DEFAULT
+
+    # Generate PKCE
+    code_verifier = secrets.token_urlsafe(43)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+
+    # Start session
+    try:
+        resp = httpx.post(
+            f"{url}/v1/auth/cli/start",
+            json={"code_challenge": code_challenge},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            console.print(f"  [red]Failed to start auth session ({resp.status_code})[/red]")
+            return False
+        data = resp.json()
+    except httpx.ConnectError:
+        console.print(f"  [red]Cannot reach {url}[/red]")
+        console.print("  [dim]Is the Ninetrix Cloud API running?[/dim]")
+        return False
+
+    session_id = data["session_id"]
+    auth_url = data["auth_url"]
+    confirm_code = data["confirm_code"]
+
+    # Show link + confirm code
+    console.print()
+    console.print(f"  [bold]→ {auth_url}[/bold]")
+    console.print()
+    console.print(f"  Confirm code: [bold yellow]{confirm_code}[/bold yellow]")
+    console.print()
+
+    # Open browser
+    try:
+        webbrowser.open(auth_url)
+        console.print("  [dim]Browser opened. Complete sign-in there.[/dim]")
+    except Exception:
+        console.print("  [dim]Open the link above in your browser.[/dim]")
+
+    console.print()
+
+    # Poll for completion
+    poll_interval = 2
+    max_wait = 600  # 10 minutes
+    elapsed = 0
+
+    with console.status("  Waiting for sign in...", spinner="dots"):
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+            try:
+                resp = httpx.get(
+                    f"{url}/v1/auth/cli/{session_id}",
+                    params={"code_verifier": code_verifier},
+                    timeout=5,
+                )
+                if resp.status_code != 200:
+                    continue
+
+                poll_data = resp.json()
+                status = poll_data.get("status", "")
+
+                if status == "completed":
+                    access_token = poll_data.get("access_token", "")
+                    refresh_token = poll_data.get("refresh_token", "")
+                    user_name = poll_data.get("user_name", "")
+                    user_email = poll_data.get("user_email", "")
+                    org_id = poll_data.get("org_id", "")
+
+                    if not access_token:
+                        # Completed but no PKCE proof — shouldn't happen
+                        continue
+
+                    # Save everything
+                    save_auth(
+                        token=access_token,
+                        refresh_token=refresh_token,
+                        user_name=user_name,
+                        user_email=user_email,
+                        org_id=org_id,
+                        api_url=url,
+                    )
+                    set_api_url(url)
+
+                    console.print(
+                        f"\n  [green]✓[/green] Authenticated as "
+                        f"[bold]{user_name or user_email}[/bold]"
+                    )
+                    return True
+
+                elif status == "expired":
+                    console.print("\n  [red]Session expired.[/red] Run again to retry.")
+                    return False
+
+            except Exception:
+                continue
+
+    console.print("\n  [red]Timed out waiting for sign in.[/red]")
+    return False
+
+
 @click.group("auth")
 def auth_cmd() -> None:
     """Manage authentication with the Ninetrix API hub."""
@@ -34,26 +156,33 @@ def auth_cmd() -> None:
 
 
 @auth_cmd.command("login")
-@click.option("--token", "-t", required=True, metavar="TOKEN",
-              help="Personal access token from the Ninetrix dashboard (Settings → API Keys)")
+@click.option("--token", "-t", default=None, metavar="TOKEN",
+              help="Personal access token (for CI/CD). Omit to sign in via browser.")
 @click.option("--api-url", default=None, metavar="URL",
-              help=f"API endpoint to connect to (saved to {CONFIG_FILE}). "
-                   f"Defaults to {_CLOUD_DEFAULT}.")
-def auth_login(token: str, api_url: str | None) -> None:
-    """Authenticate with the Ninetrix API.
+              help=f"API endpoint (default: {_CLOUD_DEFAULT})")
+def auth_login(token: str | None, api_url: str | None) -> None:
+    """Authenticate with the Ninetrix Cloud.
 
-    Saves the token to ~/.agentfile/auth.json and the API URL to
-    ~/.agentfile/config.json so every subsequent `ninetrix run/up`
-    works without any env vars or .env files.
+    Without --token: opens your browser for GitHub/Google/email sign-in.
+    With --token: saves the API token directly (for CI/CD pipelines).
 
     \b
     Examples:
-      ninetrix auth login --token nxt_xxxxx
-      ninetrix auth login --token nxt_xxxxx --api-url https://api.ninetrix.io
+      ninetrix auth login                        # browser OAuth
+      ninetrix auth login --token nxt_xxxxx      # API token (CI/CD)
     """
     console.print()
 
-    # Resolve URL: flag > env var > existing config > cloud default
+    if not token:
+        # Browser OAuth flow
+        console.print("  [bold]Sign in to Ninetrix Cloud[/bold]\n")
+        ok = cli_auth_flow(api_url=api_url)
+        if not ok:
+            raise SystemExit(1)
+        console.print()
+        return
+
+    # Manual token flow (existing behavior for CI/CD)
     url = (
         api_url
         or os.environ.get("AGENTFILE_API_URL")
@@ -61,7 +190,6 @@ def auth_login(token: str, api_url: str | None) -> None:
         or _CLOUD_DEFAULT
     )
 
-    # Verify the token against the live API before saving
     try:
         resp = httpx.get(
             f"{url}/v1/tokens",
@@ -90,11 +218,7 @@ def auth_login(token: str, api_url: str | None) -> None:
 
     console.print(f"  [green]✓[/green] Token saved    → [dim]{TOKEN_FILE}[/dim]")
     console.print(f"  [green]✓[/green] API URL saved  → [dim]{CONFIG_FILE}[/dim]")
-    console.print(f"\n  [dim]API:[/dim] {url}")
-    console.print(
-        "\n  All [bold]ninetrix run/up[/bold] commands will now send telemetry "
-        "to this API automatically — no env vars or .env files needed.\n"
-    )
+    console.print(f"\n  [dim]API:[/dim] {url}\n")
 
 
 @auth_cmd.command("logout")

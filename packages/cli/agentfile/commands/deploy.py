@@ -50,6 +50,7 @@ def _parse_env_pairs(env_pairs: tuple[str, ...]) -> dict[str, str]:
               help="Wait for agents to come online")
 @click.option("--json", "json_output", is_flag=True, help="Machine-readable JSON output (for CI)")
 @click.option("--dry-run", is_flag=True, help="Show what would be deployed without deploying")
+@click.option("--open", "open_browser", is_flag=True, help="Open deployment in browser after deploying")
 def deploy_cmd(
     agentfile_path: str,
     agent_filter: str | None,
@@ -61,6 +62,7 @@ def deploy_cmd(
     wait: bool,
     json_output: bool,
     dry_run: bool,
+    open_browser: bool,
 ) -> None:
     """Deploy agents to Ninetrix Cloud.
 
@@ -109,15 +111,22 @@ def deploy_cmd(
         if json_output:
             print(json.dumps({"error": "not_authenticated"}))
             raise SystemExit(1)
+
+        # Interactive browser auth flow
+        console.print("  [yellow]Not authenticated.[/yellow] Sign in to deploy to Ninetrix Cloud.\n")
+
+        from agentfile.commands.auth import cli_auth_flow
+        ok = cli_auth_flow(api_url=api_url)
+        if not ok:
+            raise SystemExit(1)
+
+        # Re-resolve auth after login
+        api_url, token = resolve_cloud_auth(token_override)
+        if not token:
+            console.print("  [red]Authentication failed.[/red]")
+            raise SystemExit(1)
+
         console.print()
-        console.print(Panel(
-            "[red bold]Not authenticated[/red bold]\n\n"
-            "Run [bold]ninetrix auth login --token <token>[/bold] to connect.\n"
-            f"Get your token at [bold]{_APP_URL}/settings/tokens[/bold]",
-            title="[red]Authentication required[/red]",
-            border_style="red",
-        ))
-        raise SystemExit(1)
 
     client = CloudClient(api_url, token)
 
@@ -364,3 +373,12 @@ def _print_summary(results) -> None:
         console.print(f"  [green]{ok} deployed[/green], [red]{fail} failed[/red]\n")
     else:
         console.print(f"  [green]✓ {ok} agent(s) deployed successfully[/green]\n")
+
+    # Open deployment in browser if requested or first-time deploy
+    if open_browser and results:
+        import webbrowser
+        for r in results:
+            if r.deployment_id:
+                deploy_url = f"{_APP_URL}/deployments/{r.deployment_id}"
+                console.print(f"  [dim]Opening:[/dim] {deploy_url}")
+                webbrowser.open(deploy_url)

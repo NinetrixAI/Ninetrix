@@ -72,8 +72,98 @@ def auth_headers(api_url: str) -> dict[str, str]:
 def save_token(token: str) -> None:
     """Persist a token to disk (mode 0600)."""
     TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(json.dumps({"token": token}))
+    # Preserve existing data (refresh_token, user info) if present
+    existing: dict = {}
+    if TOKEN_FILE.exists():
+        try:
+            existing = json.loads(TOKEN_FILE.read_text())
+        except Exception:
+            pass
+    existing["token"] = token
+    TOKEN_FILE.write_text(json.dumps(existing, indent=2))
     TOKEN_FILE.chmod(0o600)
+
+
+def save_auth(
+    *,
+    token: str = "",
+    refresh_token: str = "",
+    user_name: str = "",
+    user_email: str = "",
+    org_id: str = "",
+    api_url: str = "",
+) -> None:
+    """Persist full auth state (after browser OAuth flow)."""
+    TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if token:
+        data["token"] = token
+    if refresh_token:
+        data["refresh_token"] = refresh_token
+    if user_name:
+        data["user_name"] = user_name
+    if user_email:
+        data["user_email"] = user_email
+    if org_id:
+        data["org_id"] = org_id
+    if api_url:
+        data["api_url"] = api_url
+    TOKEN_FILE.write_text(json.dumps(data, indent=2))
+    TOKEN_FILE.chmod(0o600)
+
+
+def read_refresh_token() -> str | None:
+    """Read the stored refresh token, or None."""
+    if not TOKEN_FILE.exists():
+        return None
+    try:
+        data = json.loads(TOKEN_FILE.read_text())
+        return data.get("refresh_token")
+    except Exception:
+        return None
+
+
+def read_auth_info() -> dict:
+    """Read full auth info (user_name, user_email, org_id, etc.)."""
+    if not TOKEN_FILE.exists():
+        return {}
+    try:
+        return json.loads(TOKEN_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def refresh_access_token(api_url: str) -> str | None:
+    """Use the stored refresh token to get a fresh access token.
+
+    Returns the new access token, or None if refresh failed.
+    Updates the stored tokens on success.
+    """
+    rt = read_refresh_token()
+    if not rt:
+        return None
+
+    try:
+        import httpx
+        resp = httpx.post(
+            f"{api_url}/v1/auth/refresh",
+            json={"refresh_token": rt},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            # Update stored tokens
+            save_auth(
+                token=data.get("access_token", ""),
+                refresh_token=data.get("refresh_token", rt),
+                **{k: v for k, v in read_auth_info().items()
+                   if k in ("user_name", "user_email", "org_id", "api_url")},
+            )
+            return data.get("access_token")
+        else:
+            return None
+    except Exception:
+        return None
 
 
 def clear_token() -> None:
