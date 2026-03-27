@@ -72,7 +72,7 @@ jobs:
           git add packages/cli/pyproject.toml
           git commit -m "chore(cli): bump version to ${{ steps.version.outputs.new }}"
           git tag "${{ steps.version.outputs.tag }}"
-          git push origin HEAD "${{ steps.version.outputs.tag }}"
+          git push origin HEAD:refs/heads/main "${{ steps.version.outputs.tag }}"
 
       - name: Build wheel
         run: |
