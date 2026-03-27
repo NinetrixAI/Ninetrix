@@ -88,28 +88,28 @@ def schema_docs() -> None:
 @schema_cmd.command("validate")
 @click.argument("files", nargs=-1, required=True)
 def schema_validate(files: tuple[str, ...]) -> None:
-    """Validate one or more agentfile.yaml files against the schema."""
-    from agentfile.core.models import AgentFile
+    """Validate one or more agentfile.yaml files (alias for 'ninetrix validate').
 
-    has_errors = False
+    Shows field-level errors pointing to the bad YAML field, not raw stack traces.
+
+    \b
+    For full validation including env vars and template rendering use:
+      ninetrix validate --file <path>
+
+    \b
+    Examples:
+      ninetrix schema validate agentfile.yaml
+      ninetrix schema validate *.yaml
+    """
+    from agentfile.commands.validate import _check_schema, _print_table
+
+    all_results: list[dict] = []
     for filepath in files:
-        path = Path(filepath)
-        if not path.exists():
-            console.print(f"  [red]✗[/red] {path}: file not found")
-            has_errors = True
-            continue
-        try:
-            af = AgentFile.from_path(path)
-            errs = af.validate()
-            if errs:
-                console.print(f"  [yellow]![/yellow] {path}: {len(errs)} warning(s)")
-                for e in errs:
-                    console.print(f"      {e}")
-            else:
-                console.print(f"  [green]✓[/green] {path}: valid ({len(af.agents)} agent(s))")
-        except Exception as exc:
-            console.print(f"  [red]✗[/red] {path}: {type(exc).__name__}: {exc}")
-            has_errors = True
+        results, _ = _check_schema(filepath, None)
+        all_results.extend(results)
 
-    if has_errors:
+    any_error = _print_table(all_results)
+    console.print()
+    if any_error:
+        console.print("  [dim]For full validation: ninetrix validate --file <path>[/dim]\n")
         sys.exit(1)

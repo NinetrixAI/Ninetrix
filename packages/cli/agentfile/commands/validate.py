@@ -53,7 +53,35 @@ def _check_schema(af_path: str, environment: str | None) -> tuple[list[dict], ob
     try:
         from agentfile.core.models import AgentFile
         af = AgentFile.from_path(af_path)
+    except FileNotFoundError:
+        results.append(_r("error", "file", f"{af_path} not found"))
+        return results, None
     except Exception as exc:
+        # Try to extract field-level errors from Pydantic ValidationError
+        from pydantic import ValidationError
+        import yaml
+        ve: ValidationError | None = None
+        if isinstance(exc, ValidationError):
+            ve = exc
+        elif hasattr(exc, "__cause__") and isinstance(exc.__cause__, ValidationError):
+            ve = exc.__cause__
+        if ve is not None:
+            for err in ve.errors():
+                loc = " -> ".join(str(l) for l in err["loc"])
+                msg = err["msg"]
+                results.append(_r("error", "schema", f"Field '{loc}': {msg}"))
+            return results, None
+        # For YAML parse errors, try to extract line info
+        if isinstance(exc, yaml.YAMLError):
+            if hasattr(exc, "problem_mark"):
+                mark = exc.problem_mark
+                results.append(_r("error", "parse",
+                    f"YAML syntax error at line {mark.line + 1}, "
+                    f"column {mark.column + 1}: {exc.problem}"))
+            else:
+                results.append(_r("error", "parse", f"YAML error: {exc}"))
+            return results, None
+        # For other errors from AgentFile.from_path (e.g. missing 'agents' key)
         results.append(_r("error", "parse", str(exc)))
         return results, None
 
