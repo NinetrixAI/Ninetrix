@@ -739,6 +739,12 @@ def channel_cmd():
 @click.option("--bot", "-b", "bot_name", default=None, help="Bot name (for multiple bots of same type)")
 def connect(platform: str, agent: str | None, bot_name: str | None):
     """Connect a messaging platform to your agents."""
+    try:
+        from agentfile.core.telemetry import track
+        track("cli_channel_connect", {"platform": platform, "bot_name": bot_name or ""})
+    except Exception:
+        pass
+
     ok = False
     if platform == "telegram":
         ok = setup_telegram_interactive(agent_name=agent, bot_name=bot_name)
@@ -759,6 +765,12 @@ def connect(platform: str, agent: str | None, bot_name: str | None):
 @click.argument("bot_name_arg", metavar="BOT_NAME")
 def disconnect(bot_name_arg: str):
     """Remove a bot connection by name (e.g. 'support_bot', 'telegram')."""
+    try:
+        from agentfile.core.telemetry import track
+        track("cli_channel_disconnect", {"bot_name": bot_name_arg})
+    except Exception:
+        pass
+
     ch = get_bot(bot_name_arg)
     if not ch:
         console.print(f"  [dim]Bot '{bot_name_arg}' is not configured.[/dim]")

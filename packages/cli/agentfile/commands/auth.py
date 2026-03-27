@@ -136,6 +136,13 @@ def cli_auth_flow(api_url: str | None = None) -> bool:
                         f"\n  [green]✓[/green] Authenticated as "
                         f"[bold]{user_name or user_email}[/bold]"
                     )
+                    # Track successful auth + link anonymous ID to user
+                    try:
+                        from agentfile.core.telemetry import track, identify
+                        track("cli_auth_completed", {"method": "browser"})
+                        identify(user_email=user_email, org_id=org_id)
+                    except Exception:
+                        pass
                     return True
 
                 elif status == "expired":

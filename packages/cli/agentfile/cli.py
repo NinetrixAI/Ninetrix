@@ -37,6 +37,7 @@ from agentfile.commands.schema import schema_cmd
 from agentfile.commands.channel import channel_cmd
 from agentfile.commands.tools import tools_cmd
 from agentfile.commands.hub import hub_cmd
+from agentfile.commands.completion import completion_cmd
 
 console = Console()
 
@@ -56,7 +57,7 @@ _DOCKER_COMMANDS = frozenset({
 @click.version_option(f"v{__version__}", "--version", "-V", prog_name="Ninetrix")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """[bold]Ninetrix[/bold] — build and deploy AI agents as containers.
+    """Ninetrix — build and deploy AI agents as containers.
 
     \b
     Quick start:
@@ -119,6 +120,7 @@ def cli(ctx: click.Context) -> None:
       ninetrix doctor        check Docker, API, pool, and env vars
       ninetrix auth          manage API authentication
       ninetrix config        view and set persistent CLI configuration
+      ninetrix completion    set up shell tab-completion (bash, zsh, fish)
     """
     # Pre-flight Docker check for commands that need it.
     # Runs before any YAML parsing or template work — gives immediate feedback.
@@ -126,6 +128,22 @@ def cli(ctx: click.Context) -> None:
     if invoked in _DOCKER_COMMANDS:
         from agentfile.core.docker import require_docker
         require_docker()
+
+    # Track command usage (anonymous, opt-out)
+    if invoked:
+        try:
+            from agentfile.core.telemetry import track
+            track(f"cli_{invoked}", {"command": invoked})
+        except Exception:
+            pass
+
+    # Flush telemetry on exit
+    import atexit
+    try:
+        from agentfile.core.telemetry import shutdown
+        atexit.register(shutdown)
+    except Exception:
+        pass
 
 
 # Register sub-commands
@@ -159,6 +177,10 @@ cli.add_command(schema_cmd,      name="schema")
 cli.add_command(channel_cmd,     name="channel")
 cli.add_command(tools_cmd,       name="tools")
 cli.add_command(hub_cmd,         name="hub")
+cli.add_command(completion_cmd,  name="completion")
+
+from agentfile.commands.telemetry_cmd import telemetry_cmd
+cli.add_command(telemetry_cmd, name="telemetry")
 
 
 def main() -> None:
@@ -179,14 +201,24 @@ def main() -> None:
         # own exceptions and give better messages, but this prevents raw tracebacks.
         from docker.errors import DockerException
         from agentfile.core.errors import fmt_docker_error
+        from rich.panel import Panel
         if isinstance(exc, DockerException):
             msg, hint = fmt_docker_error(exc)
-            console.print(f"\n  [red]✗[/red] Docker error: {msg}")
-            if hint:
-                console.print(f"    [dim]Hint: {hint}[/dim]")
+            console.print()
+            console.print(Panel(
+                f"[red bold]{msg}[/red bold]"
+                + (f"\n\n[dim]Hint: {hint}[/dim]" if hint else ""),
+                title="[red]Docker error[/red]",
+                border_style="red",
+            ))
         else:
-            console.print(f"\n  [red]✗[/red] {exc}")
-        console.print("    [dim]Set NINETRIX_DEBUG=1 for the full traceback.[/dim]")
+            console.print()
+            console.print(Panel(
+                f"[red bold]{exc}[/red bold]\n\n"
+                "[dim]Set NINETRIX_DEBUG=1 for the full traceback.[/dim]",
+                title="[red]Error[/red]",
+                border_style="red",
+            ))
         sys.exit(1)
 
 
