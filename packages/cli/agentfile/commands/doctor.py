@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import socket
+import urllib.request
+import yaml
 from pathlib import Path
 
 import click
@@ -153,6 +155,7 @@ def _check_agentfile(path: str) -> list[tuple[str, str, str]]:
         af = AgentFile.from_path(path)
     except Exception as exc:
         results.append(_fail(f"{path} parse error — {exc}"))
+        results.append(_warn(f"  Run 'ninetrix validate --file {path}' for detailed diagnostics"))
         return results
 
     errors = af.validate()
@@ -245,6 +248,77 @@ def _check_agentfile(path: str) -> list[tuple[str, str, str]]:
     return results
 
 
+def _check_connectivity() -> list[tuple[str, str, str]]:
+    """Check outbound HTTPS connectivity by probing pypi.org."""
+    results: list[tuple[str, str, str]] = []
+    try:
+        urllib.request.urlopen("https://pypi.org", timeout=5)
+        results.append(_ok("Internet connectivity OK"))
+    except Exception:
+        results.append(_fail("No internet connection"))
+        results.append(_warn("  Check your network connection or proxy settings (HTTP_PROXY / HTTPS_PROXY)"))
+    return results
+
+
+def _check_ports() -> list[tuple[str, str, str]]:
+    """Check whether key service ports are free or in use."""
+    _PORT_MAP = {8000: "API", 8080: "MCP Gateway", 5432: "PostgreSQL", 3000: "Dashboard"}
+    results: list[tuple[str, str, str]] = []
+    for port, service_name in _PORT_MAP.items():
+        try:
+            sock = socket.create_connection(("localhost", port), timeout=0.5)
+            sock.close()
+            results.append(_warn(
+                f"Port {port} ({service_name}) is in use — 'ninetrix dev' may fail. "
+                f"Free it with: lsof -i :{port}"
+            ))
+        except OSError:
+            results.append(_ok(f"Port {port} ({service_name}) available"))
+    return results
+
+
+def _check_mcp_config() -> list[tuple[str, str, str]]:
+    """Check ~/.agentfile/mcp-worker.yaml configuration."""
+    results: list[tuple[str, str, str]] = []
+    config_path = Path.home() / ".agentfile" / "mcp-worker.yaml"
+    if not config_path.exists():
+        results.append(_warn("No MCP worker config (~/.agentfile/mcp-worker.yaml) — run 'ninetrix dev' to auto-create"))
+        return results
+    try:
+        data = yaml.safe_load(config_path.read_text()) or {}
+        servers = data.get("servers") or []
+        n = len(servers)
+        if n > 0:
+            results.append(_ok(f"MCP worker config: {n} server(s) configured"))
+        else:
+            results.append(_warn("MCP worker config exists but no servers configured — run 'ninetrix mcp add' to add tools"))
+    except Exception as exc:
+        results.append(_fail(f"MCP worker config parse error — {exc}"))
+        results.append(_warn("  Run 'ninetrix dev' to auto-create a fresh config"))
+    return results
+
+
+def _check_channel_config() -> list[tuple[str, str, str]]:
+    """Check ~/.agentfile/channels.yaml configuration."""
+    results: list[tuple[str, str, str]] = []
+    config_path = Path.home() / ".agentfile" / "channels.yaml"
+    if not config_path.exists():
+        results.append(_warn("No channel config — run 'ninetrix channel connect telegram' to set up messaging"))
+        return results
+    try:
+        data = yaml.safe_load(config_path.read_text()) or {}
+        channels = data.get("channels") or []
+        n = len(channels)
+        if n > 0:
+            results.append(_ok(f"Channel config: {n} channel(s) configured"))
+        else:
+            results.append(_warn("Channel config exists but no channels configured — run 'ninetrix channel connect telegram'"))
+    except Exception as exc:
+        results.append(_fail(f"Channel config parse error — {exc}"))
+        results.append(_warn("  Run 'ninetrix channel connect telegram' to reconfigure"))
+    return results
+
+
 def _load_dotenv_key(key: str) -> str | None:
     env_file = Path(".env")
     if not env_file.exists():
@@ -256,10 +330,13 @@ def _load_dotenv_key(key: str) -> str | None:
     return None
 
 
-def _check_database() -> tuple[str, str, str]:
+def _check_database() -> list[tuple[str, str, str]]:
+    results: list[tuple[str, str, str]] = []
     url = os.environ.get("DATABASE_URL") or _load_dotenv_key("DATABASE_URL")
     if not url:
-        return _warn("DATABASE_URL not set (persistence and API disabled)")
+        results.append(_warn("DATABASE_URL not set (persistence and API disabled)"))
+        results.append(_warn("  Run 'ninetrix dev' to start a local PostgreSQL, or set DATABASE_URL in .env"))
+        return results
     # Mask credentials in display
     try:
         from urllib.parse import urlparse
@@ -267,7 +344,8 @@ def _check_database() -> tuple[str, str, str]:
         display = f"{p.scheme}://…@{p.hostname}{p.path}"
     except Exception:
         display = url[:30] + "…"
-    return _ok(f"DATABASE_URL set → {display}")
+    results.append(_ok(f"DATABASE_URL set → {display}"))
+    return results
 
 
 @click.command("doctor")
@@ -289,10 +367,14 @@ def doctor_cmd(agentfile_path: str) -> None:
             add(category, r)
 
     add_many("Docker",    _check_docker())
-    add("API",       _check_api())
-    add("Database",  _check_database())
+    add("API",            _check_api())
+    add_many("Database",  _check_database())
     add_many("Pool",      _check_pool())
     add_many("Agentfile", _check_agentfile(agentfile_path))
+    add_many("Ports",     _check_ports())
+    add_many("Network",   _check_connectivity())
+    add_many("MCP",       _check_mcp_config())
+    add_many("Channels",  _check_channel_config())
 
     # Render results
     table = Table(box=None, padding=(0, 1), show_header=False)
