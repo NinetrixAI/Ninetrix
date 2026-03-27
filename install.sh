@@ -83,5 +83,5 @@ else
     printf "    ${CYAN}ninetrix build${RESET} — build Docker image\n"
     printf "    ${CYAN}ninetrix run${RESET}   — run your agent\n"
     printf "\n"
-    printf "  Docs: https://ninetrix.io/docs\n\n"
+    printf "  Docs: https://docs.ninetrix.io\n\n"
 fi

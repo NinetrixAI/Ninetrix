@@ -42,7 +42,7 @@ agents:
 ```
 
 ```bash
-pip install ninetrix
+curl -fsSL https://install.ninetrix.io | sh
 ninetrix build
 ninetrix run
 ```
@@ -54,8 +54,11 @@ That's it. Your agent runs in an isolated Docker container with full observabili
 ## Quick Start
 
 ```bash
-# Install
-pip install ninetrix
+# Install (auto-detects pipx, uv, or pip3)
+curl -fsSL https://install.ninetrix.io | sh
+
+# Or manually: pip install ninetrix
+# Or:          uv tool install ninetrix
 
 # Start the local stack (Postgres, API, dashboard, MCP gateway)
 ninetrix dev
